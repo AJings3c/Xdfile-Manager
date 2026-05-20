@@ -314,8 +314,30 @@ func (m *xdfileModel) pasteClipboardToActivePanel() tea.Cmd {
 		return nil
 	}
 	if len(sources) == 0 {
-		m.setStatus("Clipboard is empty")
-		return nil
+		virtualSources, virtualErr := xdfileReadClipboardVirtualFilesFunc()
+		if virtualErr != nil {
+			m.setStatusErr(virtualErr)
+			return nil
+		}
+		if len(virtualSources) == 0 {
+			m.setStatus("Clipboard is empty")
+			return nil
+		}
+		if xdfileIsNetBoxPath(m.panels[m.activePanel].Cwd) {
+			m.setStatus("Shell virtual paste supports local panels only")
+			return nil
+		}
+		m.cancelPanelMouseInteraction()
+		pending := &xdfilePendingClipboardPaste{
+			VirtualSources:       append([]xdfileShellClipboardFile(nil), virtualSources...),
+			DestinationDir:       m.panels[m.activePanel].Cwd,
+			ConflictVirtualIndex: -1,
+		}
+		if err := pending.initQueue(); err != nil {
+			m.setStatusErr(err)
+			return nil
+		}
+		return m.continuePendingClipboardPaste(pending)
 	}
 	if xdfileIsNetBoxPath(m.panels[m.activePanel].Cwd) {
 		if cutMode {
@@ -326,9 +348,10 @@ func (m *xdfileModel) pasteClipboardToActivePanel() tea.Cmd {
 	m.cancelPanelMouseInteraction()
 
 	pending := &xdfilePendingClipboardPaste{
-		Sources:        append([]string(nil), sources...),
-		CutMode:        cutMode,
-		DestinationDir: m.panels[m.activePanel].Cwd,
+		Sources:              append([]string(nil), sources...),
+		CutMode:              cutMode,
+		DestinationDir:       m.panels[m.activePanel].Cwd,
+		ConflictVirtualIndex: -1,
 	}
 	if err := pending.initQueue(); err != nil {
 		m.setStatusErr(err)

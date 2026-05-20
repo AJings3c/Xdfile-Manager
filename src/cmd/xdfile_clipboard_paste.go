@@ -46,6 +46,23 @@ func (pending *xdfilePendingClipboardPaste) initQueue() error {
 	}
 
 	pending.Queue = pending.Queue[:0]
+	if len(pending.VirtualSources) > 0 {
+		for index, source := range pending.VirtualSources {
+			targetPath, err := pending.virtualTargetPath(source.Name)
+			if err != nil {
+				return err
+			}
+			pending.Queue = append(pending.Queue, xdfilePendingClipboardPasteItem{
+				SourcePath:   source.Name,
+				TargetPath:   targetPath,
+				TopLevel:     true,
+				Virtual:      true,
+				VirtualIndex: index,
+			})
+		}
+		return nil
+	}
+
 	for _, source := range pending.Sources {
 		sourcePath := filepath.Clean(source)
 		if pending.remoteDestination() && xdfileIsNetBoxPath(sourcePath) {
@@ -75,6 +92,26 @@ func (pending *xdfilePendingClipboardPaste) initQueue() error {
 	return nil
 }
 
+func (pending *xdfilePendingClipboardPaste) virtualMode() bool {
+	return pending != nil && len(pending.VirtualSources) > 0
+}
+
+func (pending *xdfilePendingClipboardPaste) virtualTargetPath(name string) (string, error) {
+	if pending == nil {
+		return "", fmt.Errorf("missing clipboard paste state")
+	}
+	name = filepath.Clean(strings.TrimSpace(name))
+	if name == "" || name == "." || filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
+		return "", fmt.Errorf("invalid Shell clipboard file name: %q", name)
+	}
+	for _, part := range strings.FieldsFunc(name, func(r rune) bool { return r == '/' || r == '\\' || r == os.PathSeparator }) {
+		if part == "" || part == "." || part == ".." {
+			return "", fmt.Errorf("unsafe Shell clipboard file name: %q", name)
+		}
+	}
+	return filepath.Join(pending.DestinationDir, name), nil
+}
+
 func (m *xdfileModel) applyPendingClipboardPasteItem(
 	pending *xdfilePendingClipboardPaste,
 	item xdfilePendingClipboardPasteItem,
@@ -85,6 +122,9 @@ func (m *xdfileModel) applyPendingClipboardPasteItem(
 	if item.CleanupDir {
 		_ = os.Remove(item.SourcePath)
 		return false, nil, nil
+	}
+	if item.Virtual {
+		return m.applyPendingVirtualClipboardPasteItem(pending, item)
 	}
 	if pending.remoteDestination() {
 		return m.applyPendingRemoteClipboardPasteItem(pending, item)
@@ -148,6 +188,37 @@ func (m *xdfileModel) applyPendingClipboardPasteItem(
 	return true, nil, nil
 }
 
+func (m *xdfileModel) applyPendingVirtualClipboardPasteItem(
+	pending *xdfilePendingClipboardPaste,
+	item xdfilePendingClipboardPasteItem,
+) (bool, tea.Cmd, error) {
+	targetPath := filepath.Clean(item.TargetPath)
+	if item.VirtualIndex < 0 || item.VirtualIndex >= len(pending.VirtualSources) {
+		return false, nil, fmt.Errorf("invalid Shell clipboard file index: %d", item.VirtualIndex)
+	}
+
+	if _, err := os.Stat(targetPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			cmd := m.applyPendingVirtualClipboardPasteTransfer(pending, item.VirtualIndex, item.SourcePath, targetPath, item.TopLevel, xdfileActionPaste, false)
+			return false, cmd, nil
+		}
+		return false, nil, err
+	}
+
+	if pending.ConflictPolicy != "" {
+		cmd, err := m.applyPendingVirtualClipboardPasteConflictAction(pending, pending.ConflictPolicy, item.VirtualIndex, item.SourcePath, targetPath, item.TopLevel)
+		return false, cmd, err
+	}
+
+	pending.ConflictSource = item.SourcePath
+	pending.ConflictTarget = targetPath
+	pending.ConflictTopLevel = item.TopLevel
+	pending.ConflictVirtualIndex = item.VirtualIndex
+	m.pendingClipboardPaste = pending
+	m.openClipboardPasteConflict(item.SourcePath, targetPath, false)
+	return true, nil, nil
+}
+
 func (m *xdfileModel) applyPendingClipboardPasteTransfer(
 	pending *xdfilePendingClipboardPaste,
 	sourcePath string,
@@ -163,6 +234,53 @@ func (m *xdfileModel) applyPendingClipboardPasteTransfer(
 		return xdfileCopyPath(sourcePath, targetPath)
 	}
 	return m.localClipboardPasteCmd(pending, sourcePath, targetPath, "", topLevel, action, work)
+}
+
+func (m *xdfileModel) applyPendingVirtualClipboardPasteTransfer(
+	pending *xdfilePendingClipboardPaste,
+	index int,
+	sourceName string,
+	targetPath string,
+	topLevel bool,
+	action xdfileAction,
+	replace bool,
+) tea.Cmd {
+	m.setStatus("Pasting %s", xdfileClipboardPasteBase(targetPath))
+	work := func() error {
+		if replace {
+			return xdfileReplaceVirtualClipboardFile(index, sourceName, targetPath)
+		}
+		return xdfileCopyClipboardVirtualFileFunc(index, sourceName, targetPath)
+	}
+	return m.localClipboardPasteCmd(pending, sourceName, targetPath, "", topLevel, action, work)
+}
+
+func xdfileReplaceVirtualClipboardFile(index int, sourceName string, targetPath string) error {
+	targetPath = filepath.Clean(targetPath)
+	stagedTarget, err := xdfileUniqueReplaceStageTarget(targetPath)
+	if err != nil {
+		return err
+	}
+
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.RemoveAll(stagedTarget)
+		}
+	}()
+
+	if err := xdfileCopyClipboardVirtualFileFunc(index, sourceName, stagedTarget); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(targetPath); err != nil {
+		return err
+	}
+	if err := os.Rename(stagedTarget, targetPath); err != nil {
+		return err
+	}
+
+	cleanup = false
+	return nil
 }
 
 func (pending *xdfilePendingClipboardPaste) recordTarget(targetPath string, topLevel bool) {
@@ -286,11 +404,19 @@ func (m *xdfileModel) resolvePendingClipboardPasteConflict(action xdfileAction) 
 	pending.ConflictSource = ""
 	pending.ConflictTarget = ""
 	pending.ConflictTopLevel = false
+	virtualIndex := pending.ConflictVirtualIndex
+	pending.ConflictVirtualIndex = -1
 
 	m.modal.Action = ""
 	m.closeModal()
 
-	cmd, err := m.applyPendingClipboardPasteConflictAction(pending, action, sourcePath, targetPath, topLevel)
+	var cmd tea.Cmd
+	var err error
+	if pending.virtualMode() {
+		cmd, err = m.applyPendingVirtualClipboardPasteConflictAction(pending, action, virtualIndex, sourcePath, targetPath, topLevel)
+	} else {
+		cmd, err = m.applyPendingClipboardPasteConflictAction(pending, action, sourcePath, targetPath, topLevel)
+	}
 	if err != nil {
 		m.pendingClipboardPaste = nil
 		if pending.CutMode {
@@ -316,6 +442,9 @@ func (m *xdfileModel) applyPendingClipboardPasteConflictAction(
 ) (tea.Cmd, error) {
 	if pending == nil {
 		return nil, nil
+	}
+	if pending.virtualMode() {
+		return m.applyPendingVirtualClipboardPasteConflictAction(pending, action, pending.ConflictVirtualIndex, sourcePath, targetPath, topLevel)
 	}
 	if pending.remoteDestination() {
 		return m.applyPendingRemoteClipboardPasteConflictAction(pending, action, sourcePath, targetPath, topLevel)
@@ -349,6 +478,38 @@ func (m *xdfileModel) applyPendingClipboardPasteConflictAction(
 			return nil, err
 		}
 		return m.applyPendingClipboardPasteTransfer(pending, sourcePath, renamedTarget, topLevel, xdfileActionPasteConflictRename), nil
+	default:
+		return nil, fmt.Errorf("unknown paste conflict action: %s", action)
+	}
+	return nil, nil
+}
+
+func (m *xdfileModel) applyPendingVirtualClipboardPasteConflictAction(
+	pending *xdfilePendingClipboardPaste,
+	action xdfileAction,
+	index int,
+	sourceName string,
+	targetPath string,
+	topLevel bool,
+) (tea.Cmd, error) {
+	if pending == nil {
+		return nil, nil
+	}
+	if index < 0 || index >= len(pending.VirtualSources) {
+		return nil, fmt.Errorf("invalid Shell clipboard file index: %d", index)
+	}
+
+	switch action {
+	case xdfileActionPasteConflictOverwrite:
+		return m.applyPendingVirtualClipboardPasteTransfer(pending, index, sourceName, targetPath, topLevel, xdfileActionPasteConflictOverwrite, true), nil
+	case xdfileActionPasteConflictSkip:
+		pending.Skipped++
+	case xdfileActionPasteConflictRename:
+		renamedTarget, err := xdfileUniqueCopyTarget(targetPath)
+		if err != nil {
+			return nil, err
+		}
+		return m.applyPendingVirtualClipboardPasteTransfer(pending, index, sourceName, renamedTarget, topLevel, xdfileActionPasteConflictRename, false), nil
 	default:
 		return nil, fmt.Errorf("unknown paste conflict action: %s", action)
 	}

@@ -250,31 +250,35 @@ type xdfileClipboardMoveUndoBatch struct {
 }
 
 type xdfilePendingClipboardPaste struct {
-	Sources          []string
-	CutMode          bool
-	DestinationDir   string
-	Queue            []xdfilePendingClipboardPasteItem
-	ConflictSource   string
-	ConflictTarget   string
-	ConflictTopLevel bool
-	ConflictApplyAll bool
-	ConflictPolicy   xdfileAction
-	Targets          []string
-	RemainingSources []string
-	Skipped          int
-	Overwritten      int
-	Renamed          int
-	LastTarget       string
-	FocusTarget      string
-	MoveUndoRoot     string
-	MoveUndoItems    []xdfileClipboardMoveUndoItem
+	Sources              []string
+	VirtualSources       []xdfileShellClipboardFile
+	CutMode              bool
+	DestinationDir       string
+	Queue                []xdfilePendingClipboardPasteItem
+	ConflictSource       string
+	ConflictTarget       string
+	ConflictTopLevel     bool
+	ConflictVirtualIndex int
+	ConflictApplyAll     bool
+	ConflictPolicy       xdfileAction
+	Targets              []string
+	RemainingSources     []string
+	Skipped              int
+	Overwritten          int
+	Renamed              int
+	LastTarget           string
+	FocusTarget          string
+	MoveUndoRoot         string
+	MoveUndoItems        []xdfileClipboardMoveUndoItem
 }
 
 type xdfilePendingClipboardPasteItem struct {
-	SourcePath string
-	TargetPath string
-	TopLevel   bool
-	CleanupDir bool
+	SourcePath   string
+	TargetPath   string
+	TopLevel     bool
+	CleanupDir   bool
+	Virtual      bool
+	VirtualIndex int
 }
 
 type xdfileModel struct {

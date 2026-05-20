@@ -140,7 +140,7 @@ func (m *xdfileModel) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 }
 
 func (m *xdfileModel) handleFileClipboardShortcut(msg tea.KeyMsg) (tea.Cmd, bool) {
-	if msg.Paste && len(msg.Runes) > 0 {
+	if msg.Paste && len(msg.Runes) > 0 && !xdfileIsFilePasteShortcut(msg) {
 		return nil, false
 	}
 	if m.terminalFocused && !m.terminalAutoFocused {
@@ -175,7 +175,7 @@ func xdfileIsFilePasteShortcut(msg tea.KeyMsg) bool {
 	if msg.Type == tea.KeyCtrlShiftV {
 		return true
 	}
-	if msg.Paste && msg.PasteShortcut == tea.KeyCtrlShiftV {
+	if msg.PasteShortcut == tea.KeyCtrlShiftV {
 		return true
 	}
 	return msg.String() == "ctrl+shift+v"
@@ -183,19 +183,29 @@ func xdfileIsFilePasteShortcut(msg tea.KeyMsg) bool {
 
 func (m *xdfileModel) hasClipboardFilePayload() bool {
 	paths, err := m.currentClipboardFilePaths()
-	return err == nil && len(paths) > 0
+	if err == nil && len(paths) > 0 {
+		return true
+	}
+	virtualFiles, virtualErr := xdfileReadClipboardVirtualFilesFunc()
+	return virtualErr == nil && len(virtualFiles) > 0
 }
 
 func (m *xdfileModel) handleFilePasteEvent(msg tea.KeyMsg) (tea.Cmd, bool) {
-	if !msg.Paste {
+	if !msg.Paste && msg.PasteShortcut != tea.KeyCtrlShiftV {
 		return nil, false
 	}
 	if !xdfileIsFilePasteShortcut(msg) {
 		return nil, false
 	}
 	paths, err := m.currentClipboardFilePaths()
-	if err != nil || len(paths) == 0 {
+	if err != nil {
 		return nil, false
+	}
+	if len(paths) == 0 {
+		if !m.hasClipboardFilePayload() {
+			return nil, false
+		}
+		return m.executeAction(xdfileActionPaste), true
 	}
 	if len(msg.Runes) > 0 && !xdfilePastedTextMatchesClipboardFiles(string(msg.Runes), paths) {
 		return nil, false
@@ -262,7 +272,11 @@ func (m *xdfileModel) activeClipboardEntries() []xdfileEntry {
 
 func (m *xdfileModel) canPasteClipboardFiles() bool {
 	paths, _, err := m.currentClipboardPayload()
-	return err == nil && len(paths) > 0
+	if err == nil && len(paths) > 0 {
+		return true
+	}
+	virtualFiles, virtualErr := xdfileReadClipboardVirtualFilesFunc()
+	return virtualErr == nil && len(virtualFiles) > 0
 }
 
 func (m *xdfileModel) currentClipboardFilePaths() ([]string, error) {
@@ -281,6 +295,11 @@ func (m *xdfileModel) currentClipboardPayload() ([]string, bool, error) {
 			return paths, cut, nil
 		}
 		return append([]string(nil), m.clipboardPaths...), m.clipboardCut, nil
+	}
+	if err == nil {
+		if virtualFiles, virtualErr := xdfileReadClipboardVirtualFilesFunc(); virtualErr == nil && len(virtualFiles) > 0 {
+			return nil, false, nil
+		}
 	}
 	if len(m.clipboardPaths) > 0 {
 		return append([]string(nil), m.clipboardPaths...), m.clipboardCut, nil

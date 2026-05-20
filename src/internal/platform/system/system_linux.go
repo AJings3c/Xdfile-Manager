@@ -53,6 +53,14 @@ func writeClipboardPaths(paths []string, cut bool) error {
 	return runLinuxClipboardWriteCommands(linuxClipboardTextWriteCommands(), payload)
 }
 
+func readClipboardVirtualFiles() ([]ShellClipboardFile, error) {
+	return nil, nil
+}
+
+func copyClipboardVirtualFile(_ int, _ string, _ string) error {
+	return fmt.Errorf("Shell virtual clipboard files are only available on Windows")
+}
+
 func readLinuxClipboardPayload() (linuxClipboardPayload, bool, error) {
 	if !linuxClipboardReadToolAvailable() {
 		return linuxClipboardPayload{}, false, fmt.Errorf("Linux clipboard tool not found: install wl-clipboard, xclip, or xsel")

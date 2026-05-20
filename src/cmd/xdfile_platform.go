@@ -7,11 +7,15 @@ import (
 	platformterminal "github.com/s0x401/xdfile-manager/src/internal/platform/terminal"
 )
 
+type xdfileShellClipboardFile = platformsystem.ShellClipboardFile
+
 const xdfileCreateNoWindow = 0x08000000
 
 var xdfileHostTerminal = platformterminal.DetectCurrent()
 var xdfileShowSystemPropertiesFunc = platformsystem.ShowProperties
 var xdfileShowNativeContextMenuFunc = platformsystem.ShowContextMenu
+var xdfileReadClipboardVirtualFilesFunc = platformsystem.ReadClipboardVirtualFiles
+var xdfileCopyClipboardVirtualFileFunc = platformsystem.CopyClipboardVirtualFile
 
 func xdfileWindowRenderWidth(width int) int {
 	return xdfileWindowRenderWidthForHost(width, xdfileHostTerminal)

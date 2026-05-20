@@ -76,6 +76,14 @@ func writeClipboardPaths(paths []string, cut bool) error {
 	return cmd.Run()
 }
 
+func readClipboardVirtualFiles() ([]ShellClipboardFile, error) {
+	return nil, nil
+}
+
+func copyClipboardVirtualFile(_ int, _ string, _ string) error {
+	return fmt.Errorf("Shell virtual clipboard files are only available on Windows")
+}
+
 func openPath(path string) error {
 	if path == "" {
 		return fmt.Errorf("empty path")

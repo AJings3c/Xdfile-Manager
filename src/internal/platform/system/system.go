@@ -2,6 +2,12 @@ package system
 
 import "os/exec"
 
+type ShellClipboardFile struct {
+	Name  string
+	IsDir bool
+	Size  int64
+}
+
 type CommandMenuListEncoding int
 
 const (
@@ -21,6 +27,14 @@ func ReadClipboardCut() (bool, error) {
 
 func WriteClipboardPaths(paths []string, cut bool) error {
 	return writeClipboardPaths(paths, cut)
+}
+
+func ReadClipboardVirtualFiles() ([]ShellClipboardFile, error) {
+	return readClipboardVirtualFiles()
+}
+
+func CopyClipboardVirtualFile(index int, expectedName string, targetPath string) error {
+	return copyClipboardVirtualFile(index, expectedName, targetPath)
 }
 
 func OpenPath(path string) error {
