@@ -273,11 +273,7 @@ func (m *xdfileModel) renderPanel(index int) string {
 	if index == m.activePanel {
 		titlePrefix = xdfileTitleStyle.Render(panel.Label)
 	}
-	cursorDisplay := 0
-	if len(panel.Entries) > 0 {
-		cursorDisplay = min(panel.Cursor+1, len(panel.Entries))
-	}
-	titleRightParts := []string{fmt.Sprintf("%d/%d", cursorDisplay, len(panel.Entries))}
+	titleRightParts := []string{fmt.Sprintf("%d/%d", panel.cursorEntryNumber(), panel.entryCount())}
 	if marked := panel.markedCount(); marked > 0 {
 		titleRightParts = append(titleRightParts, fmt.Sprintf("%d sel", marked))
 	}

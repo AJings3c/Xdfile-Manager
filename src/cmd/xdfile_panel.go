@@ -34,6 +34,26 @@ func (p *xdfilePanel) selected() (xdfileEntry, bool) {
 	return p.Entries[p.Cursor], true
 }
 
+func (p *xdfilePanel) entryCount() int {
+	return max(0, len(p.Entries)-p.parentEntryOffset())
+}
+
+func (p *xdfilePanel) cursorEntryNumber() int {
+	if len(p.Entries) == 0 || p.Cursor < 0 {
+		return 0
+	}
+
+	cursor := min(p.Cursor, len(p.Entries)-1)
+	return min(max(0, cursor+1-p.parentEntryOffset()), p.entryCount())
+}
+
+func (p *xdfilePanel) parentEntryOffset() int {
+	if len(p.Entries) > 0 && p.Entries[0].IsParent {
+		return 1
+	}
+	return 0
+}
+
 func (entry xdfileEntry) displaySize() string {
 	if entry.IsDir || entry.IsParent {
 		return ""
