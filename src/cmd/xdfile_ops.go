@@ -1194,10 +1194,19 @@ func xdfileUniqueReplaceStageTarget(targetPath string) (string, error) {
 	return "", fmt.Errorf("unable to find a replace staging target for %s", targetPath)
 }
 
-func xdfileReplacePath(sourcePath string, targetPath string, move bool) error {
+func xdfileReplacePathContext(
+	ctx context.Context,
+	sourcePath string,
+	targetPath string,
+	move bool,
+	progress *xdfileFileOperationProgress,
+) error {
 	sourcePath = filepath.Clean(sourcePath)
 	targetPath = filepath.Clean(targetPath)
 
+	if err := xdfileCheckFileOperationContext(ctx); err != nil {
+		return err
+	}
 	stagedTarget, err := xdfileUniqueReplaceStageTarget(targetPath)
 	if err != nil {
 		return err
@@ -1211,14 +1220,17 @@ func xdfileReplacePath(sourcePath string, targetPath string, move bool) error {
 	}()
 
 	if move {
-		err = xdfileMovePath(sourcePath, stagedTarget)
+		err = xdfileMovePathContext(ctx, sourcePath, stagedTarget, progress)
 	} else {
-		err = xdfileCopyPath(sourcePath, stagedTarget)
+		err = xdfileCopyPathContext(ctx, sourcePath, stagedTarget, progress)
 	}
 	if err != nil {
 		return err
 	}
 
+	if err := xdfileCheckFileOperationContext(ctx); err != nil {
+		return err
+	}
 	if err := os.RemoveAll(targetPath); err != nil {
 		return err
 	}

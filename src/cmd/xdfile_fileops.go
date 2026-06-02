@@ -84,53 +84,77 @@ func (m *xdfileModel) startFileOperationNow(op xdfileFileOperation) tea.Cmd {
 	op.TargetPath = strings.TrimSpace(op.TargetPath)
 	op.SourcePaths = append([]string(nil), op.SourcePaths...)
 
+	return m.startFileOperationTask(op.runningStatus(), func(ctx context.Context, progress *xdfileFileOperationProgress) tea.Msg {
+		return xdfileRunFileOperation(ctx, op, progress)
+	})
+}
+
+func (m *xdfileModel) startFileOperationTask(
+	status string,
+	run func(context.Context, *xdfileFileOperationProgress) tea.Msg,
+) tea.Cmd {
+	if m == nil || run == nil {
+		return nil
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	progress := &xdfileFileOperationProgress{}
 	m.fileOperationCancel = cancel
 	m.fileOperationProgress = progress
 
-	m.setStatus("%s (Ctrl+C to cancel%s)", op.runningStatus(), m.fileOperationQueueSuffix())
-	return tea.Batch(xdfileRunFileOperationCmd(ctx, op, progress), m.startBackgroundTask())
+	m.setStatus("%s (Ctrl+C to cancel%s)", strings.TrimSpace(status), m.fileOperationQueueSuffix())
+	return tea.Batch(func() tea.Msg {
+		return run(ctx, progress)
+	}, m.startBackgroundTask())
 }
 
-func xdfileRunFileOperationCmd(ctx context.Context, op xdfileFileOperation, progress *xdfileFileOperationProgress) tea.Cmd {
-	return func() tea.Msg {
-		msg := xdfileFileOperationDoneMsg{Operation: op}
-		switch op.Kind {
-		case xdfileFileOperationCopy:
-			msg.Count, msg.Failures, msg.Err = xdfileRunTransferFileOperation(ctx, op, progress, false)
-		case xdfileFileOperationMove:
-			msg.Count, msg.Failures, msg.Err = xdfileRunTransferFileOperation(ctx, op, progress, true)
-		case xdfileFileOperationDelete:
-			paths := append([]string(nil), op.SourcePaths...)
-			if len(paths) == 0 && op.SourcePath != "" {
-				paths = []string{op.SourcePath}
-			}
-			msg.DeleteBatch, msg.Failures, msg.Err = xdfileStageDeletePathsContext(ctx, paths, progress)
-			if msg.Err == nil {
-				msg.Count = len(msg.DeleteBatch.Items)
-			}
-		case xdfileFileOperationRename:
-			msg.Err = xdfileRenamePath(op.SourcePath, op.TargetPath)
-			if msg.Err == nil {
-				msg.Count = 1
-			}
-		case xdfileFileOperationMkdir:
-			msg.Err = xdfileMkdirPath(op.TargetPath)
-			if msg.Err == nil {
-				msg.Count = 1
-			}
-		default:
-			msg.Err = fmt.Errorf("unsupported file operation: %s", op.Kind)
-		}
-		return msg
+func (m *xdfileModel) finishFileOperationTask() {
+	if m == nil {
+		return
 	}
-}
-
-func (m *xdfileModel) applyFileOperationDone(msg xdfileFileOperationDoneMsg) tea.Cmd {
 	m.stopBackgroundTask()
 	m.fileOperationCancel = nil
 	m.fileOperationProgress = nil
+}
+
+func xdfileRunFileOperation(
+	ctx context.Context,
+	op xdfileFileOperation,
+	progress *xdfileFileOperationProgress,
+) xdfileFileOperationDoneMsg {
+	msg := xdfileFileOperationDoneMsg{Operation: op}
+	switch op.Kind {
+	case xdfileFileOperationCopy:
+		msg.Count, msg.Failures, msg.Err = xdfileRunTransferFileOperation(ctx, op, progress, false)
+	case xdfileFileOperationMove:
+		msg.Count, msg.Failures, msg.Err = xdfileRunTransferFileOperation(ctx, op, progress, true)
+	case xdfileFileOperationDelete:
+		paths := append([]string(nil), op.SourcePaths...)
+		if len(paths) == 0 && op.SourcePath != "" {
+			paths = []string{op.SourcePath}
+		}
+		msg.DeleteBatch, msg.Failures, msg.Err = xdfileStageDeletePathsContext(ctx, paths, progress)
+		if msg.Err == nil {
+			msg.Count = len(msg.DeleteBatch.Items)
+		}
+	case xdfileFileOperationRename:
+		msg.Err = xdfileRenamePath(op.SourcePath, op.TargetPath)
+		if msg.Err == nil {
+			msg.Count = 1
+		}
+	case xdfileFileOperationMkdir:
+		msg.Err = xdfileMkdirPath(op.TargetPath)
+		if msg.Err == nil {
+			msg.Count = 1
+		}
+	default:
+		msg.Err = fmt.Errorf("unsupported file operation: %s", op.Kind)
+	}
+	return msg
+}
+
+func (m *xdfileModel) applyFileOperationDone(msg xdfileFileOperationDoneMsg) tea.Cmd {
+	m.finishFileOperationTask()
 
 	if msg.Operation.Kind == xdfileFileOperationDelete && msg.Count > 0 {
 		m.pushDeleteUndoBatch(msg.DeleteBatch)

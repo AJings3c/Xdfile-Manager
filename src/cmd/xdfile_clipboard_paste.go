@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,7 +14,7 @@ import (
 
 func (m *xdfileModel) continuePendingClipboardPaste(pending *xdfilePendingClipboardPaste) tea.Cmd {
 	if pending == nil {
-		return nil
+		return m.startNextQueuedFileOperation()
 	}
 
 	for len(pending.Queue) > 0 {
@@ -226,14 +227,22 @@ func (m *xdfileModel) applyPendingClipboardPasteTransfer(
 	topLevel bool,
 	action xdfileAction,
 ) tea.Cmd {
-	m.setStatus("Pasting %s", xdfileClipboardPasteBase(targetPath))
-	work := func() error {
+	work := func(ctx context.Context, progress *xdfileFileOperationProgress) error {
 		if pending.CutMode {
-			return xdfileMovePath(sourcePath, targetPath)
+			return xdfileMovePathContext(ctx, sourcePath, targetPath, progress)
 		}
-		return xdfileCopyPath(sourcePath, targetPath)
+		return xdfileCopyPathContext(ctx, sourcePath, targetPath, progress)
 	}
-	return m.localClipboardPasteCmd(pending, sourcePath, targetPath, "", topLevel, action, work)
+	return m.localClipboardPasteCmd(
+		pending,
+		sourcePath,
+		targetPath,
+		"",
+		topLevel,
+		action,
+		fmt.Sprintf("Pasting %s", xdfileClipboardPasteBase(targetPath)),
+		work,
+	)
 }
 
 func (m *xdfileModel) applyPendingVirtualClipboardPasteTransfer(
@@ -245,18 +254,42 @@ func (m *xdfileModel) applyPendingVirtualClipboardPasteTransfer(
 	action xdfileAction,
 	replace bool,
 ) tea.Cmd {
-	m.setStatus("Pasting %s", xdfileClipboardPasteBase(targetPath))
-	work := func() error {
-		if replace {
-			return xdfileReplaceVirtualClipboardFile(index, sourceName, targetPath)
+	work := func(ctx context.Context, progress *xdfileFileOperationProgress) error {
+		if err := xdfileCheckFileOperationContext(ctx); err != nil {
+			return err
 		}
-		return xdfileCopyClipboardVirtualFileFunc(index, sourceName, targetPath)
+		if replace {
+			return xdfileReplaceVirtualClipboardFileContext(ctx, index, sourceName, targetPath, progress)
+		}
+		if err := xdfileCopyClipboardVirtualFileFunc(index, sourceName, targetPath); err != nil {
+			return err
+		}
+		progress.addItem()
+		return nil
 	}
-	return m.localClipboardPasteCmd(pending, sourceName, targetPath, "", topLevel, action, work)
+	return m.localClipboardPasteCmd(
+		pending,
+		sourceName,
+		targetPath,
+		"",
+		topLevel,
+		action,
+		fmt.Sprintf("Pasting %s", xdfileClipboardPasteBase(targetPath)),
+		work,
+	)
 }
 
-func xdfileReplaceVirtualClipboardFile(index int, sourceName string, targetPath string) error {
+func xdfileReplaceVirtualClipboardFileContext(
+	ctx context.Context,
+	index int,
+	sourceName string,
+	targetPath string,
+	progress *xdfileFileOperationProgress,
+) error {
 	targetPath = filepath.Clean(targetPath)
+	if err := xdfileCheckFileOperationContext(ctx); err != nil {
+		return err
+	}
 	stagedTarget, err := xdfileUniqueReplaceStageTarget(targetPath)
 	if err != nil {
 		return err
@@ -272,6 +305,9 @@ func xdfileReplaceVirtualClipboardFile(index int, sourceName string, targetPath 
 	if err := xdfileCopyClipboardVirtualFileFunc(index, sourceName, stagedTarget); err != nil {
 		return err
 	}
+	if err := xdfileCheckFileOperationContext(ctx); err != nil {
+		return err
+	}
 	if err := os.RemoveAll(targetPath); err != nil {
 		return err
 	}
@@ -280,6 +316,7 @@ func xdfileReplaceVirtualClipboardFile(index int, sourceName string, targetPath 
 	}
 
 	cleanup = false
+	progress.addItem()
 	return nil
 }
 
@@ -462,8 +499,9 @@ func (m *xdfileModel) applyPendingClipboardPasteConflictAction(
 				"",
 				topLevel,
 				xdfileActionPasteConflictOverwrite,
-				func() error {
-					return xdfileReplacePath(sourcePath, targetPath, false)
+				fmt.Sprintf("Replacing %s", xdfileClipboardPasteBase(targetPath)),
+				func(ctx context.Context, progress *xdfileFileOperationProgress) error {
+					return xdfileReplacePathContext(ctx, sourcePath, targetPath, false, progress)
 				},
 			), nil
 		}
@@ -523,12 +561,13 @@ func (m *xdfileModel) localClipboardPasteCmd(
 	replacedPath string,
 	topLevel bool,
 	action xdfileAction,
-	work func() error,
+	status string,
+	work func(context.Context, *xdfileFileOperationProgress) error,
 ) tea.Cmd {
-	run := func() tea.Msg {
+	return m.startFileOperationTask(status, func(ctx context.Context, progress *xdfileFileOperationProgress) tea.Msg {
 		var err error
 		if work != nil {
-			err = work()
+			err = work(ctx, progress)
 		}
 		return xdfileLocalClipboardPasteDoneMsg{
 			Pending:      pending,
@@ -539,12 +578,11 @@ func (m *xdfileModel) localClipboardPasteCmd(
 			ReplacedPath: replacedPath,
 			Err:          err,
 		}
-	}
-	return tea.Batch(run, m.startBackgroundTask())
+	})
 }
 
 func (m *xdfileModel) applyLocalClipboardPasteDone(msg xdfileLocalClipboardPasteDoneMsg) tea.Cmd {
-	m.stopBackgroundTask()
+	m.finishFileOperationTask()
 	pending := msg.Pending
 	if pending == nil {
 		pending = m.pendingClipboardPaste
@@ -555,8 +593,16 @@ func (m *xdfileModel) applyLocalClipboardPasteDone(msg xdfileLocalClipboardPaste
 			m.pushClipboardMoveUndo(pending)
 			m.cleanupEmptyClipboardMoveUndoRoot(pending)
 		}
+		if pending != nil && len(pending.Targets) > 0 {
+			m.reloadAllPanels()
+			m.focusClipboardPasteTarget(pending)
+		}
+		if errors.Is(msg.Err, context.Canceled) {
+			m.setStatus("Paste canceled")
+			return m.startNextQueuedFileOperation()
+		}
 		m.setStatusErr(msg.Err)
-		return nil
+		return m.startNextQueuedFileOperation()
 	}
 	if pending == nil {
 		return nil
@@ -619,7 +665,7 @@ func (m *xdfileModel) finishPendingClipboardPaste(pending *xdfilePendingClipboar
 	}
 
 	m.setStatus("%s", xdfileClipboardPasteStatus(pending))
-	return cmd
+	return tea.Batch(cmd, m.startNextQueuedFileOperation())
 }
 
 func (m *xdfileModel) focusClipboardPasteTarget(pending *xdfilePendingClipboardPaste) {

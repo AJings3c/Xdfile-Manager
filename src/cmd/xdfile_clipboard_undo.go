@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -123,12 +124,13 @@ func (m *xdfileModel) applyPendingClipboardPasteMoveReplace(
 		backupPath,
 		topLevel,
 		xdfileActionPasteConflictOverwrite,
-		func() error {
-			if err := xdfileMovePath(targetPath, backupPath); err != nil {
+		fmt.Sprintf("Replacing %s", xdfileClipboardPasteBase(targetPath)),
+		func(ctx context.Context, progress *xdfileFileOperationProgress) error {
+			if err := xdfileMovePathContext(ctx, targetPath, backupPath, nil); err != nil {
 				return err
 			}
-			if err := xdfileMovePath(sourcePath, targetPath); err != nil {
-				_ = xdfileMovePath(backupPath, targetPath)
+			if err := xdfileMovePathContext(ctx, sourcePath, targetPath, progress); err != nil {
+				_ = xdfileMovePathContext(context.Background(), backupPath, targetPath, nil)
 				return err
 			}
 			return nil
