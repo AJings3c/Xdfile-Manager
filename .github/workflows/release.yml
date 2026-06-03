@@ -69,6 +69,7 @@ jobs:
           OUTPUT_NAME="xdfile${{ matrix.ext }}"
           go build -ldflags="-s -w" -o "$OUTPUT_DIR/$OUTPUT_NAME" .
           cp README.md "$OUTPUT_DIR/"
+          cp picture/Xdfile.jpg "$OUTPUT_DIR/"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

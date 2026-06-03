@@ -1,10 +1,24 @@
 # Xdfile Manager
 
-Xdfile Manager 是一个双面板终端文件管理器，面向键盘高效操作，同时补齐常用鼠标交互。它支持本地文件管理、内置命令行、预览、用户菜单、主题和 SSH / NetBox 远程目录。
+<p align="center">
+  <img src="picture/Xdfile.jpg" alt="Xdfile Manager" width="200"/>
+</p>
 
-推荐在 Windows Terminal 中使用：
+<p align="center">
+  现代化双面板终端文件管理器 · 键盘高效操作 · 完善鼠标支持
+</p>
 
-https://github.com/microsoft/terminal
+<p align="center">
+  <img src="https://img.shields.io/badge/Platform-Windows%20|%20Linux%20|%20macOS-blue" alt="Platform"/>
+  <img src="https://img.shields.io/badge/License-AGPL--3.0-green" alt="License"/>
+  <img src="https://img.shields.io/badge/Go-1.25-blue" alt="Go"/>
+</p>
+
+---
+
+**Xdfile Manager** 是一个功能丰富的双面板终端文件管理器，专为键盘高效操作设计，同时补齐常用鼠标交互。支持本地文件管理、内置命令行、文件预览、用户自定义菜单、主题系统和 SSH/NetBox 远程目录访问。
+
+> 推荐配合 [Windows Terminal](https://github.com/microsoft/terminal) 或 [iTerm2](https://github.com/gnachman/iTerm2) 使用以获得最佳体验。
 
 ## 启动
 

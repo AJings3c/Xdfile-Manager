@@ -19,3 +19,5 @@ build_target() {
 build_target windows amd64 dist/windows-amd64/xdfile.exe
 build_target darwin amd64 dist/darwin-amd64/xdfile
 build_target darwin arm64 dist/darwin-arm64/xdfile
+
+cp picture/Xdfile.jpg dist/darwin-arm64/
