@@ -64,17 +64,14 @@ jobs:
           GOARCH: ${{ matrix.arch }}
           CGO_ENABLED: 0
         run: |
-          mkdir -p dist
           OUTPUT_NAME="Xdfile-${{ matrix.os }}_${{ matrix.arch }}${{ matrix.ext }}"
-          go build -ldflags="-s -w" -o "dist/$OUTPUT_NAME" .
-          cp README.md dist/
-          cp picture/Xdfile.jpg dist/
+          go build -ldflags="-s -w" -o "$OUTPUT_NAME" .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: dist/*
+          path: Xdfile-${{ matrix.os }}_${{ matrix.arch }}${{ matrix.ext }}
 
       - name: Upload to Release
         if: matrix.os == 'linux' && matrix.arch == 'amd64'
@@ -82,6 +79,6 @@ jobs:
         with:
           tag_name: v1.0.0-${{ github.run_number }}
           files: |
-            dist/*
+            Xdfile-*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
