@@ -79,7 +79,7 @@ jobs:
             dist/${{ matrix.os }}-${{ matrix.arch }}/*
 
       - name: Upload to Release
-        if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'linux' && matrix.arch == 'amd64'
+        if: matrix.os == 'linux' && matrix.arch == 'amd64'
         uses: softprops/action-gh-release@v2
         with:
           draft: true
