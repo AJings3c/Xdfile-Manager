@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            ext: ''
+            artifact: xdfile-linux-amd64
+          - os: linux
+            arch: arm64
+            ext: ''
+            artifact: xdfile-linux-arm64
+          - os: linux
+            arch: 386
+            ext: ''
+            artifact: xdfile-linux-386
+          - os: windows
+            arch: amd64
+            ext: .exe
+            artifact: xdfile-windows-amd64
+          - os: windows
+            arch: arm64
+            ext: .exe
+            artifact: xdfile-windows-arm64
+          - os: windows
+            arch: 386
+            ext: .exe
+            artifact: xdfile-windows-386
+          - os: darwin
+            arch: amd64
+            ext: ''
+            artifact: xdfile-darwin-amd64
+          - os: darwin
+            arch: arm64
+            ext: ''
+            artifact: xdfile-darwin-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: 0
+        run: |
+          OUTPUT_DIR="dist/${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p "$OUTPUT_DIR"
+          OUTPUT_NAME="xdfile${{ matrix.ext }}"
+          go build -ldflags="-s -w" -o "$OUTPUT_DIR/$OUTPUT_NAME" .
+          cp README.md "$OUTPUT_DIR/"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/${{ matrix.os }}-${{ matrix.arch }}/*
+
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'linux' && matrix.arch == 'amd64'
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            dist/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
