@@ -82,6 +82,7 @@ jobs:
         if: matrix.os == 'linux' && matrix.arch == 'amd64'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v1.0.0-${{ github.run_number }}
           draft: true
           files: |
             dist/**/*
