@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -19,35 +19,27 @@ jobs:
           - os: linux
             arch: amd64
             ext: ''
-            artifact: xdfile-linux-amd64
           - os: linux
             arch: arm64
             ext: ''
-            artifact: xdfile-linux-arm64
           - os: linux
             arch: 386
             ext: ''
-            artifact: xdfile-linux-386
           - os: windows
             arch: amd64
             ext: .exe
-            artifact: xdfile-windows-amd64
           - os: windows
             arch: arm64
             ext: .exe
-            artifact: xdfile-windows-arm64
           - os: windows
             arch: 386
             ext: .exe
-            artifact: xdfile-windows-386
           - os: darwin
             arch: amd64
             ext: ''
-            artifact: xdfile-darwin-amd64
           - os: darwin
             arch: arm64
             ext: ''
-            artifact: xdfile-darwin-arm64
 
     steps:
       - name: Checkout
@@ -67,18 +59,28 @@ jobs:
           OUTPUT_NAME="Xdfile-${{ matrix.os }}_${{ matrix.arch }}${{ matrix.ext }}"
           go build -ldflags="-s -w" -o "$OUTPUT_NAME" .
 
-      - name: Upload artifacts
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: Xdfile-${{ matrix.os }}_${{ matrix.arch }}${{ matrix.ext }}
           path: Xdfile-${{ matrix.os }}_${{ matrix.arch }}${{ matrix.ext }}
 
-      - name: Upload to Release
-        if: matrix.os == 'linux' && matrix.arch == 'amd64'
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.0-${{ github.run_number }}
-          files: |
-            Xdfile-*
+          files: artifacts/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
