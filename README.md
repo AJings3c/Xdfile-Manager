@@ -1,7 +1,7 @@
 # Xdfile Manager
 
 <p align="center">
-  <img src="picture/Xdfile.jpg" alt="Xdfile Manager" width="200"/>
+  <img src="assets/logo_1.jpg" alt="Xdfile Manager" width="200"/>
 </p>
 
 <p align="center">
