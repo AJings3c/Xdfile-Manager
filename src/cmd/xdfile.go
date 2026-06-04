@@ -10,11 +10,11 @@ const (
 	xdfileProductName = "Xdfile Manager"
 	xdfileCopyright   = "Copyright (c) 2026 s0x401"
 
-	xdfileMinWidth           = 92
-	xdfileMinHeight          = 28
-	xdfileMinPanelWidth      = 30
-	xdfileMinPanelBodyHeight = 9
-	xdfileMinTerminalHeight  = 6
+	xdfileMinWidth           = 40
+	xdfileMinHeight          = 10
+	xdfileMinPanelWidth      = 15
+	xdfileMinPanelBodyHeight = 3
+	xdfileMinTerminalHeight  = 2
 	xdfilePanelSizeWidth     = 7
 	xdfilePanelTimeWidth     = 11
 
