@@ -14,19 +14,25 @@ import (
 type xdfileFileOperationKind string
 
 const (
-	xdfileFileOperationCopy   xdfileFileOperationKind = "copy"
-	xdfileFileOperationMove   xdfileFileOperationKind = "move"
-	xdfileFileOperationDelete xdfileFileOperationKind = "delete"
-	xdfileFileOperationRename xdfileFileOperationKind = "rename"
-	xdfileFileOperationMkdir  xdfileFileOperationKind = "mkdir"
+	xdfileFileOperationCopy        xdfileFileOperationKind = "copy"
+	xdfileFileOperationMove        xdfileFileOperationKind = "move"
+	xdfileFileOperationDelete      xdfileFileOperationKind = "delete"
+	xdfileFileOperationRename      xdfileFileOperationKind = "rename"
+	xdfileFileOperationMkdir       xdfileFileOperationKind = "mkdir"
+	xdfileFileOperationArchive     xdfileFileOperationKind = "archive"
+	xdfileFileOperationExtract     xdfileFileOperationKind = "extract"
+	xdfileFileOperationBatchRename xdfileFileOperationKind = "batch_rename"
 )
 
 type xdfileFileOperation struct {
-	Kind        xdfileFileOperationKind
-	SourcePath  string
-	SourcePaths []string
-	TargetPath  string
-	PanelIndex  int
+	Kind           xdfileFileOperationKind
+	SourcePath     string
+	SourcePaths    []string
+	TargetPath     string
+	PanelIndex     int
+	ReplaceTarget  bool
+	ConflictPolicy xdfileAction
+	RenameItems    []xdfileBatchRenameItem
 }
 
 type xdfileFileOperationFailure struct {
@@ -147,6 +153,12 @@ func xdfileRunFileOperation(
 		if msg.Err == nil {
 			msg.Count = 1
 		}
+	case xdfileFileOperationArchive:
+		msg.Count, msg.Failures, msg.Err = xdfileRunArchiveFileOperation(ctx, op, progress)
+	case xdfileFileOperationExtract:
+		msg.Count, msg.Failures, msg.Err = xdfileRunExtractFileOperation(ctx, op, progress)
+	case xdfileFileOperationBatchRename:
+		msg.Count, msg.Failures, msg.Err = xdfileRunBatchRenameFileOperation(ctx, op.RenameItems, progress)
 	default:
 		msg.Err = fmt.Errorf("unsupported file operation: %s", op.Kind)
 	}
@@ -354,10 +366,15 @@ func (m *xdfileModel) fileOperationProgressStatus() string {
 
 func (m *xdfileModel) reloadAfterFileOperation(op xdfileFileOperation) {
 	switch op.Kind {
-	case xdfileFileOperationRename, xdfileFileOperationMkdir:
+	case xdfileFileOperationRename, xdfileFileOperationMkdir, xdfileFileOperationBatchRename:
 		if m.validPanelIndex(op.PanelIndex) {
 			if err := m.reloadPanel(op.PanelIndex); err != nil {
 				m.setStatusErr(err)
+			}
+			if op.Kind == xdfileFileOperationBatchRename && len(op.RenameItems) > 0 {
+				panel := &m.panels[op.PanelIndex]
+				rows := panel.visibleRows(m.layout.panelRects[op.PanelIndex].h)
+				panel.focusPath(op.RenameItems[0].TargetPath, rows)
 			}
 			return
 		}
@@ -410,6 +427,15 @@ func (op xdfileFileOperation) runningStatus() string {
 		return fmt.Sprintf("Renaming %s", xdfileFileOperationBase(op.SourcePath))
 	case xdfileFileOperationMkdir:
 		return fmt.Sprintf("Creating %s", xdfileFileOperationBase(op.TargetPath))
+	case xdfileFileOperationArchive:
+		if sourceCount > 1 {
+			return fmt.Sprintf("Packing %d items to %s", sourceCount, xdfileFileOperationBase(op.TargetPath))
+		}
+		return fmt.Sprintf("Packing %s to %s", xdfileFileOperationBase(op.SourcePath), xdfileFileOperationBase(op.TargetPath))
+	case xdfileFileOperationExtract:
+		return fmt.Sprintf("Extracting %s to %s", xdfileFileOperationBase(op.SourcePath), xdfileFileOperationBase(op.TargetPath))
+	case xdfileFileOperationBatchRename:
+		return fmt.Sprintf("Batch renaming %d item(s)", len(op.RenameItems))
 	default:
 		return "Running file operation"
 	}
@@ -437,6 +463,12 @@ func (op xdfileFileOperation) doneStatus(count int) string {
 		return fmt.Sprintf("Renamed to %s", filepath.Base(op.TargetPath))
 	case xdfileFileOperationMkdir:
 		return fmt.Sprintf("Created %s", op.TargetPath)
+	case xdfileFileOperationArchive:
+		return fmt.Sprintf("Created archive %s", op.TargetPath)
+	case xdfileFileOperationExtract:
+		return fmt.Sprintf("Extracted %d item(s) to %s", count, op.TargetPath)
+	case xdfileFileOperationBatchRename:
+		return fmt.Sprintf("Renamed %d item(s)", count)
 	default:
 		return "File operation completed"
 	}
@@ -450,6 +482,12 @@ func (op xdfileFileOperation) partialStatus(successCount int, failureCount int) 
 		return fmt.Sprintf("Moved %d item(s), %d failed", successCount, failureCount)
 	case xdfileFileOperationDelete:
 		return fmt.Sprintf("Deleted %d item(s), %d failed", successCount, failureCount)
+	case xdfileFileOperationArchive:
+		return fmt.Sprintf("Packed %d item(s), %d failed", successCount, failureCount)
+	case xdfileFileOperationExtract:
+		return fmt.Sprintf("Extracted %d item(s), %d failed", successCount, failureCount)
+	case xdfileFileOperationBatchRename:
+		return fmt.Sprintf("Renamed %d item(s), %d failed", successCount, failureCount)
 	default:
 		return fmt.Sprintf("Completed %d item(s), %d failed", successCount, failureCount)
 	}
@@ -476,6 +514,19 @@ func xdfileNormalizeFileOperation(op xdfileFileOperation) xdfileFileOperation {
 		}
 		op.SourcePaths = sources
 	}
+	if len(op.RenameItems) > 0 {
+		items := make([]xdfileBatchRenameItem, 0, len(op.RenameItems))
+		for _, item := range op.RenameItems {
+			item.SourcePath = strings.TrimSpace(item.SourcePath)
+			item.TargetPath = strings.TrimSpace(item.TargetPath)
+			item.OldName = strings.TrimSpace(item.OldName)
+			item.NewName = strings.TrimSpace(item.NewName)
+			if item.SourcePath != "" && item.TargetPath != "" {
+				items = append(items, item)
+			}
+		}
+		op.RenameItems = items
+	}
 	return op
 }
 
@@ -498,6 +549,12 @@ func (op xdfileFileOperation) queueLabel() string {
 		return "rename"
 	case xdfileFileOperationMkdir:
 		return "mkdir"
+	case xdfileFileOperationArchive:
+		return "archive"
+	case xdfileFileOperationExtract:
+		return "extract"
+	case xdfileFileOperationBatchRename:
+		return "batch rename"
 	default:
 		return "file operation"
 	}

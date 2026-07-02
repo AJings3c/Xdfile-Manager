@@ -35,6 +35,10 @@ func (m *xdfileModel) View() string {
 			Render(msg))
 	}
 
+	if m.screen == xdfileScreenStartHub {
+		return m.renderStartHub()
+	}
+
 	m.computeLayout()
 	if m.exclusiveTerminalActive() {
 		return m.finalizeView(m.renderExclusiveTerminalView())
@@ -158,6 +162,12 @@ func (m *xdfileModel) ensurePanelCursorsVisible() {
 			continue
 		}
 		m.panels[i].ensureVisible(m.panels[i].visibleRows(rect.h))
+		if m.panelFilterActiveFor(i) {
+			m.ensurePanelFilterVisible()
+		}
+		if m.panelFuzzy.Active && m.panelFuzzy.Panel == i {
+			m.syncPanelFuzzyMatches()
+		}
 	}
 }
 
@@ -331,7 +341,7 @@ func (m *xdfileModel) setPanelSortMode(index int, mode xdfileSortMode) {
 func xdfileSortModeLabel(mode xdfileSortMode) string {
 	switch xdfileNormalizeSortMode(mode) {
 	case xdfileSortModeExt:
-		return "Extens"
+		return "Ext"
 	default:
 		return "Name"
 	}

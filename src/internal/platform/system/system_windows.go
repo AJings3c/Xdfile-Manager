@@ -230,6 +230,24 @@ func writeClipboardPaths(paths []string, cut bool) error {
 	return nil
 }
 
+func writeClipboardText(text string) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	if err := openClipboardRetry(); err != nil {
+		return err
+	}
+	defer procCloseClipboard.Call()
+
+	if result, _, err := procEmptyClipboard.Call(); result == 0 {
+		return fmt.Errorf("clear Windows clipboard: %w", err)
+	}
+	if err := setClipboardBytes(clipboardCFUnicodeText, utf16TextBytes(text)); err != nil {
+		return fmt.Errorf("write Windows text clipboard: %w", err)
+	}
+	return nil
+}
+
 func configureManagedExternalCommand(cmd *exec.Cmd) {
 	if cmd == nil {
 		return

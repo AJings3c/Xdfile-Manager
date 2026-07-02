@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -98,15 +97,28 @@ func xdfileLoadNetBoxPrefs(path string) ([]xdfileNetBoxConnection, error) {
 	if err := json.Unmarshal(data, &prefs); err != nil {
 		return nil, fmt.Errorf("parse SSH connection settings: %w", err)
 	}
-	return xdfileNormalizeNetBoxConnections(prefs.Connections), nil
+	connections, migrated, err := xdfileMigrateNetBoxConnectionPasswords(xdfileNormalizeNetBoxConnections(prefs.Connections))
+	if err != nil {
+		return nil, err
+	}
+	if migrated {
+		if err := xdfileSaveNetBoxPrefs(path, connections); err != nil {
+			return nil, fmt.Errorf("migrate SSH passwords to encrypted storage: %w", err)
+		}
+	}
+	return connections, nil
 }
 
 func xdfileSaveNetBoxPrefs(path string, connections []xdfileNetBoxConnection) error {
 	if err := os.MkdirAll(filepath.Dir(path), utils.ConfigDirPerm); err != nil {
 		return fmt.Errorf("create SSH connection config directory: %w", err)
 	}
+	connections, err := xdfilePrepareNetBoxConnectionsForStorage(connections)
+	if err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(xdfileNetBoxPrefs{
-		Connections: xdfileNormalizeNetBoxConnections(connections),
+		Connections: connections,
 	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode SSH connection settings: %w", err)
@@ -209,7 +221,14 @@ func (c xdfileNetBoxConnection) passwordForAuth() string {
 	if password := xdfileNetBoxPasswordCache[xdfileNetBoxPasswordKey(c.Name)]; password != "" {
 		return password
 	}
-	return c.Password
+	password, encrypted, err := xdfileNetBoxPasswordPlaintext(c.Password)
+	if err != nil {
+		return ""
+	}
+	if encrypted && password != "" {
+		xdfileSetNetBoxPassword(c.Name, password)
+	}
+	return password
 }
 
 func xdfileFindNetBoxConnection(name string) (xdfileNetBoxConnection, bool) {
@@ -250,6 +269,7 @@ func xdfileParseNetBoxDeleteIndexedAction(action xdfileAction) (int, bool) {
 
 func (m *xdfileModel) netBoxMenuDefinition() xdfileMenu {
 	items := []xdfileButton{
+		{Action: xdfileActionNetBoxHub, Key: "Enter", Label: "Connection Hub"},
 		{Action: xdfileActionNetBoxNew, Key: "Ins", Label: "New SSH connection"},
 	}
 	if xdfileIsNetBoxPath(m.panels[m.activePanel].Cwd) {
@@ -346,7 +366,7 @@ func (m *xdfileModel) openNetBoxConnectionForm(existing *xdfileNetBoxConnection)
 	m.openFormModal(
 		action,
 		title,
-		"Leave password blank to use key files, ssh-agent, or an existing saved password. Saved passwords are plain text.",
+		"Leave password blank to use key files, ssh-agent, or an existing saved password. Saved passwords are encrypted locally.",
 		fields,
 	)
 	m.modal.SourcePath = oldName
@@ -489,7 +509,11 @@ func (m *xdfileModel) setNetBoxConnections(connections []xdfileNetBoxConnection)
 }
 
 func (m *xdfileModel) saveNetBoxConnections(connections []xdfileNetBoxConnection) error {
-	m.setNetBoxConnections(connections)
+	prepared, err := xdfilePrepareNetBoxConnectionsForStorage(connections)
+	if err != nil {
+		return err
+	}
+	m.setNetBoxConnections(prepared)
 	return m.saveNetBoxPrefs()
 }
 
@@ -942,6 +966,10 @@ func (c xdfileNetBoxConnection) passwordSSHClientConfig() (*ssh.ClientConfig, er
 	if user == "" {
 		return nil, fmt.Errorf("SSH user is required for password login")
 	}
+	hostKeyCallback, err := xdfileKnownHostsCallbackFunc()
+	if err != nil {
+		return nil, err
+	}
 	password := c.passwordForAuth()
 	return &ssh.ClientConfig{
 		User: user,
@@ -955,7 +983,7 @@ func (c xdfileNetBoxConnection) passwordSSHClientConfig() (*ssh.ClientConfig, er
 				return answers, nil
 			}),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKeyCallback,
 		Timeout:         10 * time.Second,
 	}, nil
 }
@@ -966,7 +994,7 @@ func (c xdfileNetBoxConnection) dialPasswordSSH() (*ssh.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	client, err := ssh.Dial("tcp", net.JoinHostPort(c.Host, strconv.Itoa(c.Port)), config)
+	client, err := ssh.Dial("tcp", xdfileNetBoxDialAddress(c), config)
 	if err != nil {
 		return nil, fmt.Errorf("SSH password login failed for %s: %w", c.Name, err)
 	}

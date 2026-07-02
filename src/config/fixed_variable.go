@@ -25,6 +25,7 @@ const (
 	EmbedConfigDir           = "src/xdfile_config"
 	EmbedConfigFile          = EmbedConfigDir + "/config.toml"
 	EmbedHotkeysFile         = EmbedConfigDir + "/hotkeys.toml"
+	EmbedVimHotkeysFile      = EmbedConfigDir + "/vimHotkeys.toml"
 	EmbedThemeDir            = EmbedConfigDir + "/theme"
 	EmbedThemeCatppuccinFile = EmbedThemeDir + "/catppuccin-mocha.toml"
 )
@@ -78,8 +79,7 @@ var (
 	// Trash Directories
 	DarwinTrashDirectory = filepath.Join(HomeDir, ".Trash")
 
-	// These are used by github.com/rkoesters/xdg/trash package
-	// We need to make sure that these directories exist
+	// Linux trash paths used by delete staging and startup trash initialization.
 	LinuxTrashDirectory      = filepath.Join(xdg.DataHome, "Trash")
 	LinuxTrashDirectoryFiles = filepath.Join(xdg.DataHome, "Trash", "files")
 	LinuxTrashDirectoryInfo  = filepath.Join(xdg.DataHome, "Trash", "info")

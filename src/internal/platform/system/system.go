@@ -29,6 +29,10 @@ func WriteClipboardPaths(paths []string, cut bool) error {
 	return writeClipboardPaths(paths, cut)
 }
 
+func WriteClipboardText(text string) error {
+	return writeClipboardText(text)
+}
+
 func ReadClipboardVirtualFiles() ([]ShellClipboardFile, error) {
 	return readClipboardVirtualFiles()
 }

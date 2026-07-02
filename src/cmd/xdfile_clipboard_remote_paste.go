@@ -142,6 +142,7 @@ func (m *xdfileModel) applyRemoteClipboardPasteDone(msg xdfileRemoteClipboardPas
 		pending = m.pendingClipboardPaste
 	}
 	if msg.Err != nil {
+		m.cleanupPendingClipboardPasteCache(pending)
 		m.pendingClipboardPaste = nil
 		m.setStatusErr(msg.Err)
 		return nil

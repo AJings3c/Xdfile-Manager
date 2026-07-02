@@ -47,6 +47,9 @@ func (m *xdfileModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.userScreenVisible {
 			return m, nil
 		}
+		if m.screen == xdfileScreenStartHub && m.modal.Kind == xdfileModalNone {
+			return m, m.handleStartHubMouse(msg)
+		}
 		if m.exclusiveTerminalActive() {
 			return m, m.handleExclusiveTerminalMouse(msg)
 		}
@@ -66,6 +69,9 @@ func (m *xdfileModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		if m.screen == xdfileScreenStartHub && m.modal.Kind == xdfileModalNone {
+			return m, m.handleStartHubKey(msg)
+		}
 		if m.exclusiveTerminalActive() {
 			return m, m.handleExclusiveTerminalKey(msg)
 		}
@@ -74,6 +80,12 @@ func (m *xdfileModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.terminalExpandedViewActive() {
 			return m, m.handleTerminalExpandedKey(msg)
+		}
+		if cmd, handled := m.handlePanelFuzzyKey(msg); handled {
+			return m, cmd
+		}
+		if cmd, handled := m.handlePanelFilterKey(msg); handled {
+			return m, cmd
 		}
 		if cmd, handled := m.handlePanelSearchKey(msg); handled {
 			return m, cmd
@@ -146,6 +158,12 @@ func (m *xdfileModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.terminal.Exclusive.Title = msg.Title
 		return m, xdfileWaitTerminalMsg(m.terminal.Exclusive.Events)
+	case xdfileExclusiveTerminalCwdMsg:
+		if !m.exclusiveTerminalActive() {
+			return m, nil
+		}
+		m.terminal.Exclusive.Cwd = msg.Cwd
+		return m, xdfileWaitTerminalMsg(m.terminal.Exclusive.Events)
 	case xdfileTerminalStartResultMsg:
 		m.terminalStarting = false
 		if msg.Err != nil {
@@ -156,6 +174,7 @@ func (m *xdfileModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.terminal.Events = nil
 			m.terminal.Session = nil
 			m.terminal.Emulator = nil
+			m.terminal.RemoteProfile = ""
 			m.setStatusErr(fmt.Errorf("PTY terminal unavailable: %w", msg.Err))
 			return m, nil
 		}
@@ -167,7 +186,15 @@ func (m *xdfileModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.terminal.Events = msg.Session.events
 		m.terminal.Session = msg.Session
 		m.terminal.Emulator = msg.Session.emulator
+		m.terminal.RemoteProfile = msg.RemoteProfile
 		m.terminal.Cwd = m.panels[m.activePanel].Cwd
+		if msg.Dir != "" {
+			m.terminal.Cwd = msg.Dir
+		}
+		m.terminal.Title = msg.Title
+		if m.terminal.Title == "" {
+			m.terminal.Title = m.terminal.Cwd
+		}
 		m.syncManagedTerminalPrompt()
 
 		waitCmd := xdfileWaitTerminalMsg(m.terminal.Events)
@@ -247,6 +274,10 @@ func (m *xdfileModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.terminal.Input.CursorEnd()
 		m.refreshManagedTerminalSuggestions()
 		return m, nil
+	case xdfileAICommandDoneMsg:
+		return m, m.applyAICommandDone(msg)
+	case xdfilePluginActionDoneMsg:
+		return m, m.applyPluginActionDone(msg)
 	case xdfileTerminalCommandPollMsg:
 		if !m.terminal.Busy || !m.terminalUsesPTY() || m.terminal.Emulator == nil {
 			return m, nil
@@ -279,6 +310,7 @@ func (m *xdfileModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.terminal.Session = nil
 		m.terminal.Events = nil
 		m.terminal.Emulator = nil
+		m.terminal.RemoteProfile = ""
 		m.terminal.ScrollOffset = 0
 		if msg.Err != nil {
 			if err := m.updateTerminalHistoryResult("", m.terminal.Cwd, true); err != nil {
@@ -351,6 +383,14 @@ func (m *xdfileModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatusErr(fmt.Errorf("copied internally but system clipboard failed: %w", msg.Err))
 		}
 		return m, nil
+	case xdfileClipboardTextWriteResultMsg:
+		if msg.Err != nil {
+			if xdfileClipboardPathsEqual(m.clipboardTextPaths, xdfileClipboardTextLocalPaths(msg.Paths)) {
+				m.clipboardTextPaths = nil
+			}
+			m.setStatusErr(fmt.Errorf("copy text failed: %w", msg.Err))
+		}
+		return m, nil
 	case xdfileRemoteClipboardCopyResultMsg:
 		m.stopBackgroundTask()
 		if msg.Err != nil {
@@ -384,6 +424,12 @@ func (m *xdfileModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case xdfileRemoteClipboardPasteDoneMsg:
 		return m, m.applyRemoteClipboardPasteDone(msg)
+	case xdfileRemotePanelCopyDownloadDoneMsg:
+		return m, m.applyRemotePanelCopyDownloadDone(msg)
+	case xdfileZoxideQueryDoneMsg:
+		return m, m.applyZoxideQueryDone(msg)
+	case xdfileMD5ChecksumDoneMsg:
+		return m, m.applyMD5ChecksumDone(msg)
 	case xdfileLocalClipboardPasteDoneMsg:
 		return m, m.applyLocalClipboardPasteDone(msg)
 	case xdfileFileOperationDoneMsg:

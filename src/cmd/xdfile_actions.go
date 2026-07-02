@@ -39,6 +39,27 @@ func (m *xdfileModel) executeAction(action xdfileAction) tea.Cmd {
 	}
 	m.openMenu = ""
 	m.menuCursor = 0
+	if themeName, ok := xdfileParseThemeSelectAction(action); ok {
+		if m.applyThemeByName(themeName) {
+			m.setStatus("Theme switched to %s", xdfileThemeDisplayName(themeName))
+		}
+		return nil
+	}
+	if index, ok := xdfileParsePinOpenAction(action); ok {
+		return m.openPinIndex(index)
+	}
+	if index, ok := xdfileParsePinRenameAction(action); ok {
+		return m.openRenamePinModal(index)
+	}
+	if index, ok := xdfileParsePinDeleteAction(action); ok {
+		return m.deletePinIndex(index)
+	}
+	if index, ok := xdfileParseZoxideOpenAction(action); ok {
+		return m.openZoxideCandidate(index)
+	}
+	if index, ok := xdfileParsePluginAction(action); ok {
+		return m.runPluginAction(index)
+	}
 
 	switch action {
 	case xdfileActionHelp:
@@ -49,6 +70,28 @@ func (m *xdfileModel) executeAction(action xdfileAction) tea.Cmd {
 		return m.copySelectionToClipboard()
 	case xdfileActionClipboardCut:
 		return m.cutSelectionToClipboard()
+	case xdfileActionCopyCurrentPath:
+		return m.copyCurrentPathText()
+	case xdfileActionCopySelectedPaths:
+		return m.copySelectedPathsText()
+	case xdfileActionCopyCurrentDirectory:
+		return m.copyCurrentDirectoryText()
+	case xdfileActionPinsMenu:
+		return m.openPinsMenu()
+	case xdfileActionAddPin:
+		return m.openAddPinModal()
+	case xdfileActionOpenHomePin:
+		return m.openHomePin()
+	case xdfileActionArchive:
+		return m.openArchiveModal()
+	case xdfileActionExtractArchive:
+		return m.openExtractArchiveModal()
+	case xdfileActionBatchRename:
+		return m.openBatchRenameModal()
+	case xdfileActionZoxideJump:
+		return m.openZoxideQueryModal()
+	case xdfileActionMD5Checksum:
+		return m.startMD5ChecksumForSelection()
 	case xdfileActionSync:
 		passive := 1 - m.activePanel
 		m.panels[passive].Cwd = m.panels[m.activePanel].Cwd
@@ -73,6 +116,18 @@ func (m *xdfileModel) executeAction(action xdfileAction) tea.Cmd {
 		return m.resolvePendingClipboardPasteConflict(xdfileActionPasteConflictRename)
 	case xdfileActionPasteConflictApplyAll:
 		return m.resolvePendingClipboardPasteConflict(xdfileActionPasteConflictApplyAll)
+	case xdfileActionArchiveConflictReplace:
+		return m.resolvePendingArchiveConflict(xdfileActionArchiveConflictReplace)
+	case xdfileActionArchiveConflictSkip:
+		return m.resolvePendingArchiveConflict(xdfileActionArchiveConflictSkip)
+	case xdfileActionArchiveConflictRename:
+		return m.resolvePendingArchiveConflict(xdfileActionArchiveConflictRename)
+	case xdfileActionExtractConflictReplace:
+		return m.resolvePendingExtractConflict(xdfileActionExtractConflictReplace)
+	case xdfileActionExtractConflictSkip:
+		return m.resolvePendingExtractConflict(xdfileActionExtractConflictSkip)
+	case xdfileActionExtractConflictRename:
+		return m.resolvePendingExtractConflict(xdfileActionExtractConflictRename)
 	case xdfileActionRename:
 		return m.openRename()
 	case xdfileActionCopy:
@@ -100,6 +155,10 @@ func (m *xdfileModel) executeAction(action xdfileAction) tea.Cmd {
 		} else {
 			m.setStatus("Dotfiles are now hidden")
 		}
+	case xdfileActionFilterFiles:
+		return m.startPanelFilter()
+	case xdfileActionFuzzySearch:
+		return m.startPanelFuzzySearch()
 	case xdfileActionQuit:
 		return m.openQuitConfirm()
 	case xdfileActionRefresh:
@@ -122,14 +181,32 @@ func (m *xdfileModel) executeAction(action xdfileAction) tea.Cmd {
 		return m.syncTerminalToPanel(m.activePanel)
 	case xdfileActionTerminalExpand:
 		return m.toggleTerminalExpandedView()
+	case xdfileActionTerminalHistory:
+		return m.openTerminalHistoryModal()
+	case xdfileActionTerminalHistoryPaste:
+		return m.pasteSelectedTerminalHistoryCommand()
+	case xdfileActionAICommand:
+		return m.openAICommandModal()
+	case xdfileActionWorkspaceNew:
+		return m.newWorkspace()
+	case xdfileActionWorkspaceClose:
+		return m.closeWorkspace()
+	case xdfileActionWorkspaceNext:
+		return m.nextWorkspace()
+	case xdfileActionWorkspacePrevious:
+		return m.previousWorkspace()
 	case xdfileActionNetBoxNew:
 		return m.openNetBoxConnectionForm(nil)
+	case xdfileActionNetBoxHub:
+		return m.openStartHub(xdfileStartHubNavHosts)
 	case xdfileActionNetBoxDisconnect:
 		return m.disconnectNetBoxPanel()
 	case xdfileActionSaveLayout:
 		return m.saveLayout()
 	case xdfileActionResetLayout:
 		return m.resetSetup()
+	case xdfileActionToggleKeymap:
+		return m.toggleKeymapPreset()
 	case xdfileActionInsertCommand:
 		m.openCommandItemForm(xdfileCommandItemTypeCommand)
 		return nil
@@ -149,20 +226,25 @@ func (m *xdfileModel) executeAction(action xdfileAction) tea.Cmd {
 			m.setStatus("Ctrl+Q now opens the floating preview window")
 		}
 	case xdfileActionThemePersona3:
-		m.applyThemeByName(xdfileThemePersona3Name)
-		m.setStatus("Theme switched to %s", xdfileThemeDisplayName(xdfileThemePersona3Name))
+		if m.applyThemeByName(xdfileThemePersona3Name) {
+			m.setStatus("Theme switched to %s", xdfileThemeDisplayName(xdfileThemePersona3Name))
+		}
 	case xdfileActionThemePersona3Reload:
-		m.applyThemeByName(xdfileThemePersona3ReloadName)
-		m.setStatus("Theme switched to %s", xdfileThemeDisplayName(xdfileThemePersona3ReloadName))
+		if m.applyThemeByName(xdfileThemePersona3ReloadName) {
+			m.setStatus("Theme switched to %s", xdfileThemeDisplayName(xdfileThemePersona3ReloadName))
+		}
 	case xdfileActionThemePersona3Kotone:
-		m.applyThemeByName(xdfileThemePersona3KotoneName)
-		m.setStatus("Theme switched to %s", xdfileThemeDisplayName(xdfileThemePersona3KotoneName))
+		if m.applyThemeByName(xdfileThemePersona3KotoneName) {
+			m.setStatus("Theme switched to %s", xdfileThemeDisplayName(xdfileThemePersona3KotoneName))
+		}
 	case xdfileActionThemePersona4:
-		m.applyThemeByName(xdfileThemePersona4Name)
-		m.setStatus("Theme switched to %s", xdfileThemeDisplayName(xdfileThemePersona4Name))
+		if m.applyThemeByName(xdfileThemePersona4Name) {
+			m.setStatus("Theme switched to %s", xdfileThemeDisplayName(xdfileThemePersona4Name))
+		}
 	case xdfileActionThemePersona5:
-		m.applyThemeByName(xdfileThemePersona5Name)
-		m.setStatus("Theme switched to %s", xdfileThemeDisplayName(xdfileThemePersona5Name))
+		if m.applyThemeByName(xdfileThemePersona5Name) {
+			m.setStatus("Theme switched to %s", xdfileThemeDisplayName(xdfileThemePersona5Name))
+		}
 	case xdfileActionSortName:
 		m.setPanelSortMode(m.activePanel, xdfileSortModeName)
 		if err := m.reloadPanel(m.activePanel); err != nil {
@@ -219,6 +301,64 @@ func (m *xdfileModel) cutSelectionToClipboard() tea.Cmd {
 	return m.storeSelectionInClipboard(true)
 }
 
+func (m *xdfileModel) copyCurrentPathText() tea.Cmd {
+	panel := &m.panels[m.activePanel]
+	entry, ok := panel.selected()
+	if !ok || entry.IsParent {
+		m.setStatus("Select a file or directory path to copy")
+		return nil
+	}
+	return m.copyPathText([]string{entry.Path}, "Copied path as text")
+}
+
+func (m *xdfileModel) copySelectedPathsText() tea.Cmd {
+	entries := m.activeFileSelectionEntries()
+	if len(entries) == 0 {
+		m.setStatus("Select one or more paths to copy")
+		return nil
+	}
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		paths = append(paths, entry.Path)
+	}
+	if len(paths) == 1 {
+		return m.copyPathText(paths, "Copied path as text")
+	}
+	return m.copyPathText(paths, fmt.Sprintf("Copied %d paths as text", len(paths)))
+}
+
+func (m *xdfileModel) copyCurrentDirectoryText() tea.Cmd {
+	dir := strings.TrimSpace(m.panels[m.activePanel].Cwd)
+	if dir == "" {
+		m.setStatus("Current directory is empty")
+		return nil
+	}
+	return m.copyPathText([]string{dir}, "Copied current directory as text")
+}
+
+func (m *xdfileModel) copyPathText(paths []string, status string) tea.Cmd {
+	cleaned := make([]string, 0, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path != "" {
+			cleaned = append(cleaned, path)
+		}
+	}
+	if len(cleaned) == 0 {
+		m.setStatus("No path text to copy")
+		return nil
+	}
+	text := strings.Join(cleaned, "\n")
+	m.clipboardTextPaths = xdfileClipboardTextLocalPaths(cleaned)
+	m.setStatus("%s", status)
+	return func() tea.Msg {
+		return xdfileClipboardTextWriteResultMsg{
+			Paths: append([]string(nil), cleaned...),
+			Err:   xdfileWriteClipboardTextFunc(text),
+		}
+	}
+}
+
 func (m *xdfileModel) storeSelectionInClipboard(cut bool) tea.Cmd {
 	entries := m.activeClipboardEntries()
 	if len(entries) == 0 {
@@ -253,6 +393,7 @@ func (m *xdfileModel) storeSelectionInClipboard(cut bool) tea.Cmd {
 	m.cleanupRemoteClipboardDirs()
 	m.clipboardPaths = append([]string(nil), paths...)
 	m.clipboardPath = paths[0]
+	m.clipboardTextPaths = nil
 	m.clipboardCut = cut
 	if len(entries) == 1 && cut {
 		m.setStatus("Cut %s to clipboard", entries[0].Name)
@@ -285,6 +426,7 @@ func (m *xdfileModel) copyRemoteSelectionToClipboard(entries []xdfileEntry) tea.
 	} else {
 		m.setStatus("Downloading %d remote items to clipboard", len(paths))
 	}
+	m.clipboardTextPaths = nil
 	downloadCmd := func() tea.Msg {
 		localPaths, cacheDir, err := xdfileNetBoxDownloadPathsFunc(paths)
 		var clipboardErr error
@@ -367,8 +509,8 @@ func (m *xdfileModel) openPanelContextMenu(panelIndex int, rect xdfileRect, x in
 	row := y - (rect.y + 3)
 	index := -1
 	if row >= 0 && row < rows {
-		candidate := panel.Scroll + row
-		if candidate >= 0 && candidate < len(panel.Entries) {
+		candidate, ok := m.panelViewIndexAt(panelIndex, row, rows)
+		if ok && candidate >= 0 && candidate < len(panel.Entries) {
 			index = candidate
 			entry := panel.Entries[candidate]
 			if entry.IsParent || !panel.isMarked(entry) {
@@ -431,6 +573,7 @@ func (m *xdfileModel) panelContextMenuItems(panelIndex int, entryIndex int) []xd
 	canPaste := m.canPasteClipboardFiles()
 	items := []xdfileButton{
 		{Action: xdfileActionPaste, Key: "Ctrl+Shift+V", Label: "Paste", Disabled: !canPaste},
+		{Action: xdfileActionCopyCurrentDirectory, Label: "Copy directory path"},
 		{Action: xdfileActionRefresh, Label: "Refresh"},
 		{Action: xdfileActionMkdir, Key: "F7", Label: "New folder"},
 		{Action: xdfileActionTerminalExpand, Key: "Ctrl+O", Label: "Expand terminal"},
@@ -451,6 +594,11 @@ func (m *xdfileModel) panelContextMenuItems(panelIndex int, entryIndex int) []xd
 		{Action: xdfileActionProperties, Key: "R", Label: "Properties", Disabled: entry.IsParent || remoteEntry},
 		{Action: xdfileActionClipboardCopy, Key: "Ctrl+Shift+C", Label: "Copy", Disabled: entry.IsParent},
 		{Action: xdfileActionClipboardCut, Key: "Ctrl+X", Label: "Cut", Disabled: entry.IsParent || remoteEntry},
+		{Action: xdfileActionCopyCurrentPath, Label: "Copy path text", Disabled: entry.IsParent},
+		{Action: xdfileActionCopySelectedPaths, Label: "Copy selected paths", Disabled: entry.IsParent},
+		{Action: xdfileActionCopyCurrentDirectory, Label: "Copy directory path"},
+		{Action: xdfileActionArchive, Label: "Pack archive", Disabled: entry.IsParent || remoteEntry},
+		{Action: xdfileActionExtractArchive, Label: "Extract archive", Disabled: entry.IsParent || entry.IsDir || remoteEntry},
 		{Action: xdfileActionPaste, Key: "Ctrl+Shift+V", Label: "Paste", Disabled: !canPaste},
 		{Action: xdfileActionRename, Key: "F4", Label: "Rename", Disabled: entry.IsParent},
 		{Action: xdfileActionDelete, Key: "F8", Label: "Delete", Disabled: entry.IsParent || remoteEntry},
@@ -619,17 +767,21 @@ func (m *xdfileModel) openTransferConfirm(action xdfileAction) tea.Cmd {
 		m.setStatus("Select a file or directory first")
 		return nil
 	}
-	for _, entry := range entries {
-		if xdfileIsNetBoxPath(entry.Path) || xdfileIsNetBoxPath(m.panels[1-m.activePanel].Cwd) {
-			m.setStatus("Panel-to-panel SSH copy/move is unavailable; use clipboard copy/paste")
-			return nil
-		}
-	}
 	dstPanel := &m.panels[1-m.activePanel]
 
 	sourcePaths := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		sourcePaths = append(sourcePaths, entry.Path)
+	}
+	if xdfilePanelTransferTouchesRemote(sourcePaths, dstPanel.Cwd) {
+		if action == xdfileActionMove {
+			m.setStatus("Local/remote move is unavailable; use F5 copy only")
+			return nil
+		}
+		if err := xdfileValidatePanelRemoteCopy(sourcePaths, dstPanel.Cwd); err != nil {
+			m.setStatusErr(err)
+			return nil
+		}
 	}
 
 	targetPath := dstPanel.Cwd
@@ -664,6 +816,91 @@ func (m *xdfileModel) openTransferConfirm(action xdfileAction) tea.Cmd {
 		PanelIndex:  m.activePanel,
 	}
 	m.setStatus("Press Enter to confirm or Esc to cancel")
+	return nil
+}
+
+func xdfilePanelTransferTouchesRemote(sourcePaths []string, destinationDir string) bool {
+	if xdfileIsNetBoxPath(destinationDir) {
+		return true
+	}
+	_, sourceRemote := xdfileClassifyNetBoxPaths(sourcePaths)
+	return sourceRemote
+}
+
+func xdfileClassifyNetBoxPaths(paths []string) (local bool, remote bool) {
+	for _, value := range paths {
+		if xdfileIsNetBoxPath(value) {
+			remote = true
+		} else {
+			local = true
+		}
+	}
+	return local, remote
+}
+
+func xdfileValidatePanelRemoteCopy(sourcePaths []string, destinationDir string) error {
+	sourceLocal, sourceRemote := xdfileClassifyNetBoxPaths(sourcePaths)
+	destinationRemote := xdfileIsNetBoxPath(destinationDir)
+	if sourceLocal && sourceRemote {
+		return fmt.Errorf("local/remote panel copy cannot mix local and SSH sources")
+	}
+	if sourceRemote && destinationRemote {
+		return fmt.Errorf("remote-to-remote panel copy is unavailable")
+	}
+	if !sourceRemote && !destinationRemote {
+		return fmt.Errorf("panel copy does not involve SSH")
+	}
+	return nil
+}
+
+func (m *xdfileModel) startPanelRemoteCopy(sourcePaths []string, destinationDir string) tea.Cmd {
+	if len(sourcePaths) == 0 {
+		m.setStatus("Select a file or directory first")
+		return nil
+	}
+	if m.backgroundTaskBusy {
+		m.setStatus("Wait for the current background task to finish")
+		return nil
+	}
+	if err := xdfileValidatePanelRemoteCopy(sourcePaths, destinationDir); err != nil {
+		m.setStatusErr(err)
+		return nil
+	}
+
+	sourceLocal, sourceRemote := xdfileClassifyNetBoxPaths(sourcePaths)
+	m.cancelPanelMouseInteraction()
+	if sourceLocal && xdfileIsNetBoxPath(destinationDir) {
+		pending := &xdfilePendingClipboardPaste{
+			Sources:              append([]string(nil), sourcePaths...),
+			DestinationDir:       destinationDir,
+			ConflictVirtualIndex: -1,
+		}
+		if err := pending.initQueue(); err != nil {
+			m.setStatusErr(err)
+			return nil
+		}
+		if len(sourcePaths) == 1 {
+			m.setStatus("Copying %s to %s", xdfileClipboardPasteBase(sourcePaths[0]), xdfileNetBoxPathLabel(destinationDir))
+		} else {
+			m.setStatus("Copying %d items to %s", len(sourcePaths), xdfileNetBoxPathLabel(destinationDir))
+		}
+		return m.continuePendingClipboardPaste(pending)
+	}
+
+	if sourceRemote && !xdfileIsNetBoxPath(destinationDir) {
+		sources := append([]string(nil), sourcePaths...)
+		m.setStatus("Downloading %d SSH item%s to %s", len(sources), xdfilePluralSuffix(len(sources)), destinationDir)
+		return tea.Batch(func() tea.Msg {
+			localPaths, cacheDir, err := xdfileNetBoxDownloadPathsFunc(sources)
+			return xdfileRemotePanelCopyDownloadDoneMsg{
+				Paths:          localPaths,
+				CacheDir:       cacheDir,
+				DestinationDir: destinationDir,
+				Err:            err,
+			}
+		}, m.startBackgroundTask())
+	}
+
 	return nil
 }
 
@@ -846,7 +1083,26 @@ func (m *xdfileModel) openTextModalWithAction(action xdfileAction, title string,
 
 func (m *xdfileModel) closeModal() {
 	if m.modal.Action == xdfileActionPasteConflictPrompt {
+		m.cleanupPendingClipboardPasteCache(m.pendingClipboardPaste)
 		m.pendingClipboardPaste = nil
+	}
+	if m.modal.Action == xdfileActionArchiveConflictPrompt {
+		m.pendingArchive = nil
+	}
+	if m.modal.Action == xdfileActionExtractConflictPrompt {
+		m.pendingExtract = nil
+	}
+	if m.modal.Action == xdfileActionBatchRenamePreview {
+		m.pendingBatchRename = nil
+	}
+	if m.modal.Action == xdfileActionZoxideJump {
+		m.zoxideCandidates = nil
+	}
+	if m.modal.Action == xdfileActionAICommandDangerConfirm {
+		m.pendingAICommand = ""
+	}
+	if m.modal.Action == xdfileActionPluginConfirm {
+		m.pendingPluginAction = nil
 	}
 	m.modal = xdfileModal{
 		Input:         m.modalInputModel(),

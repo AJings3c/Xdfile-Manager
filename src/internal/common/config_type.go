@@ -106,9 +106,13 @@ type ConfigType struct {
 	BorderMiddleLeft  string `toml:"border_middle_left"`
 	BorderMiddleRight string `toml:"border_middle_right"`
 
-	Metadata          bool `toml:"metadata" comment:"\n==========PLUGINS========== #\nPlugins means that you need to install some external dependencies to use them.\n\nShow more detailed metadata, please install exiftool before enabling this plugin!"`
-	EnableMD5Checksum bool `toml:"enable_md5_checksum" comment:"Enable MD5 checksum generation for files"`
-	ZoxideSupport     bool `toml:"zoxide_support" comment:"Zoxide support for the fast navigation"`
+	Metadata          bool   `toml:"metadata" comment:"\n==========PLUGINS========== #\nPlugins means that you need to install some external dependencies to use them.\n\nShow more detailed metadata, please install exiftool before enabling this plugin!"`
+	EnableMD5Checksum bool   `toml:"enable_md5_checksum" comment:"Reserved legacy option. On-demand MD5 is available from the Panels menu."`
+	ZoxideSupport     bool   `toml:"zoxide_support" comment:"Zoxide support for the fast navigation"`
+	AIEnabled         bool   `toml:"ai_enabled" comment:"Enable NL2Shell command draft generation. Disabled by default."`
+	AIProvider        string `toml:"ai_provider" comment:"AI provider name. No provider is configured by default."`
+	AIModel           string `toml:"ai_model" comment:"AI model name for the configured provider."`
+	AIAPIKeyEnv       string `toml:"ai_api_key_env" comment:"Environment variable name that contains the AI API key. The key value is never stored in config."`
 }
 
 // GetIgnoreMissingFields reports whether warnings about missing TOML fields should be ignored.

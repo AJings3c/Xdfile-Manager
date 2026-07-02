@@ -61,7 +61,9 @@ var xdfileOpenPathFunc = xdfileOpenPath
 var xdfileReadClipboardPathsFunc = xdfileReadClipboardPaths
 var xdfileReadClipboardCutFunc = xdfileReadClipboardCut
 var xdfileWriteClipboardPathsFunc = xdfileWriteClipboardPaths
+var xdfileWriteClipboardTextFunc = xdfileWriteClipboardText
 var xdfileIsDetachedGUIExecutableFunc = xdfileIsWindowsGUIExecutable
+var xdfileOSRenameFunc = os.Rename
 
 var xdfileArchivePreviewLabels = map[string]string{
 	".zip":  "ZIP archive",
@@ -228,6 +230,10 @@ func xdfileReadClipboardCut() (bool, error) {
 
 func xdfileWriteClipboardPaths(paths []string, cut bool) error {
 	return platformsystem.WriteClipboardPaths(paths, cut)
+}
+
+func xdfileWriteClipboardText(text string) error {
+	return platformsystem.WriteClipboardText(text)
 }
 
 func xdfileReadPreview(path string) (string, error) {
@@ -1081,7 +1087,7 @@ func xdfileRenamePath(oldPath string, newPath string) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return os.Rename(oldClean, newClean)
+	return xdfileOSRenameFunc(oldClean, newClean)
 }
 
 func xdfileMkdirPath(path string) error {
@@ -1234,7 +1240,7 @@ func xdfileReplacePathContext(
 	if err := os.RemoveAll(targetPath); err != nil {
 		return err
 	}
-	if err := os.Rename(stagedTarget, targetPath); err != nil {
+	if err := xdfileOSRenameFunc(stagedTarget, targetPath); err != nil {
 		return err
 	}
 
@@ -1468,7 +1474,7 @@ func xdfileMovePathContext(
 	if err := os.MkdirAll(filepath.Dir(targetClean), 0o755); err != nil {
 		return err
 	}
-	if err := os.Rename(sourceClean, targetClean); err == nil {
+	if err := xdfileOSRenameFunc(sourceClean, targetClean); err == nil {
 		progress.addItem()
 		return nil
 	}
@@ -1549,7 +1555,7 @@ func xdfileStartStreamingCommand(dir string, command string, events chan tea.Msg
 	if cancel, handled := xdfileStartDetachedStreamingCommand(dir, command, events); handled {
 		return cancel, nil, nil
 	}
-	if runtime.GOOS == "windows" || runtime.GOOS == "linux" {
+	if runtime.GOOS == "windows" || runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
 		cancel, emulator, err := xdfileStartStreamingCommandPTY(dir, command, events, width, height)
 		if err == nil {
 			return cancel, emulator, nil

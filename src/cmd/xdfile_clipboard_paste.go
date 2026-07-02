@@ -22,6 +22,7 @@ func (m *xdfileModel) continuePendingClipboardPaste(pending *xdfilePendingClipbo
 		pending.Queue = pending.Queue[1:]
 		conflict, cmd, err := m.applyPendingClipboardPasteItem(pending, item)
 		if err != nil {
+			m.cleanupPendingClipboardPasteCache(pending)
 			m.pendingClipboardPaste = nil
 			if pending.CutMode {
 				m.pushClipboardMoveUndo(pending)
@@ -455,6 +456,7 @@ func (m *xdfileModel) resolvePendingClipboardPasteConflict(action xdfileAction) 
 		cmd, err = m.applyPendingClipboardPasteConflictAction(pending, action, sourcePath, targetPath, topLevel)
 	}
 	if err != nil {
+		m.cleanupPendingClipboardPasteCache(pending)
 		m.pendingClipboardPaste = nil
 		if pending.CutMode {
 			m.pushClipboardMoveUndo(pending)
@@ -588,6 +590,7 @@ func (m *xdfileModel) applyLocalClipboardPasteDone(msg xdfileLocalClipboardPaste
 		pending = m.pendingClipboardPaste
 	}
 	if msg.Err != nil {
+		m.cleanupPendingClipboardPasteCache(pending)
 		m.pendingClipboardPaste = nil
 		if pending != nil && pending.CutMode {
 			m.pushClipboardMoveUndo(pending)
@@ -626,6 +629,37 @@ func (m *xdfileModel) applyLocalClipboardPasteDone(msg xdfileLocalClipboardPaste
 	return m.continuePendingClipboardPaste(pending)
 }
 
+func (m *xdfileModel) applyRemotePanelCopyDownloadDone(msg xdfileRemotePanelCopyDownloadDoneMsg) tea.Cmd {
+	m.stopBackgroundTask()
+	if msg.Err != nil {
+		if msg.CacheDir != "" {
+			_ = xdfileRemoveAllFunc(msg.CacheDir)
+		}
+		m.setStatusErr(msg.Err)
+		return nil
+	}
+	if len(msg.Paths) == 0 {
+		if msg.CacheDir != "" {
+			_ = xdfileRemoveAllFunc(msg.CacheDir)
+		}
+		m.setStatus("Remote panel copy produced no files")
+		return nil
+	}
+
+	pending := &xdfilePendingClipboardPaste{
+		Sources:              append([]string(nil), msg.Paths...),
+		DestinationDir:       msg.DestinationDir,
+		CacheDir:             msg.CacheDir,
+		ConflictVirtualIndex: -1,
+	}
+	if err := pending.initQueue(); err != nil {
+		m.cleanupPendingClipboardPasteCache(pending)
+		m.setStatusErr(err)
+		return nil
+	}
+	return m.continuePendingClipboardPaste(pending)
+}
+
 func (m *xdfileModel) finishPendingClipboardPaste(pending *xdfilePendingClipboardPaste) tea.Cmd {
 	if pending == nil {
 		return nil
@@ -638,6 +672,7 @@ func (m *xdfileModel) finishPendingClipboardPaste(pending *xdfilePendingClipboar
 	if pending.CutMode {
 		m.pushClipboardMoveUndo(pending)
 	}
+	m.cleanupPendingClipboardPasteCache(pending)
 
 	var cmd tea.Cmd
 	if pending.CutMode {
@@ -666,6 +701,14 @@ func (m *xdfileModel) finishPendingClipboardPaste(pending *xdfilePendingClipboar
 
 	m.setStatus("%s", xdfileClipboardPasteStatus(pending))
 	return tea.Batch(cmd, m.startNextQueuedFileOperation())
+}
+
+func (m *xdfileModel) cleanupPendingClipboardPasteCache(pending *xdfilePendingClipboardPaste) {
+	if pending == nil || pending.CacheDir == "" {
+		return
+	}
+	_ = xdfileRemoveAllFunc(pending.CacheDir)
+	pending.CacheDir = ""
 }
 
 func (m *xdfileModel) focusClipboardPasteTarget(pending *xdfilePendingClipboardPaste) {

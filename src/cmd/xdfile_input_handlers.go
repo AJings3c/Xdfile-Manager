@@ -13,21 +13,13 @@ func (m *xdfileModel) handleSortShortcut(msg tea.KeyMsg) (tea.Cmd, bool) {
 		return tea.Batch(m.noteFooterCtrlHint(), m.executeAction(action)), true
 	}
 
-	switch msg.Type {
-	case tea.KeyCtrl3:
+	if m.keyMatches(msg, xdfileKeymapActionSortName) {
 		return trigger(xdfileActionSortName)
-	case tea.KeyCtrl4, tea.KeyCtrlBackslash:
+	}
+	if m.keyMatches(msg, xdfileKeymapActionSortExt) {
 		return trigger(xdfileActionSortExt)
 	}
-
-	switch msg.String() {
-	case "ctrl+4", "ctrl+\\":
-		return trigger(xdfileActionSortExt)
-	case "ctrl+3":
-		return trigger(xdfileActionSortName)
-	default:
-		return nil, false
-	}
+	return nil, false
 }
 
 func (m *xdfileModel) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool) {
@@ -56,29 +48,32 @@ func (m *xdfileModel) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	if cmd, handled := m.handleSortShortcut(msg); handled {
 		return cmd, true
 	}
+	if cmd, handled := m.handlePanelFuzzyShortcut(msg); handled {
+		return cmd, true
+	}
 	if cmd, handled := m.handlePanelSearchShortcut(msg); handled {
 		return cmd, true
 	}
 
 	if m.terminalFocused && m.terminalUsesPTY() {
-		switch msg.String() {
-		case "ctrl+o":
+		switch {
+		case m.keyMatches(msg, xdfileKeymapActionTerminalExpand):
 			return m.toggleTerminalExpandedView(), true
-		case "f10":
+		case m.keyMatches(msg, xdfileKeymapActionQuit):
 			return m.openQuitConfirm(), true
-		case "tab":
+		case m.keyMatches(msg, xdfileKeymapActionPanelNext):
 			return m.cycleFocusForward(), true
-		case "shift+tab":
+		case m.keyMatches(msg, xdfileKeymapActionPanelPrevious):
 			return m.cycleFocusBackward(), true
-		case "ctrl+left":
+		case msg.String() == "ctrl+left":
 			return m.adjustPanelSplit(-2), true
-		case "ctrl+right":
+		case msg.String() == "ctrl+right":
 			return m.adjustPanelSplit(2), true
-		case "ctrl+up":
+		case msg.String() == "ctrl+up":
 			return m.adjustTerminalHeight(1), true
-		case "ctrl+down":
+		case msg.String() == "ctrl+down":
 			return m.adjustTerminalHeight(-1), true
-		case "f2":
+		case m.keyMatches(msg, xdfileKeymapActionCommands):
 			if m.terminal.Emulator != nil && m.terminal.Emulator.IsAltScreen() {
 				return nil, false
 			}
@@ -87,50 +82,71 @@ func (m *xdfileModel) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		return nil, false
 	}
 
-	switch msg.String() {
-	case "ctrl+o":
+	panelShortcutAllowed := m.panelShortcutAllowed(msg)
+	switch {
+	case m.keyMatches(msg, xdfileKeymapActionTerminalExpand):
 		return m.toggleTerminalExpandedView(), true
-	case "f10":
+	case m.keyMatches(msg, xdfileKeymapActionQuit):
 		return m.openQuitConfirm(), true
-	case "ctrl+left":
+	case !m.terminalFocused && msg.String() == "ctrl+t":
+		return m.executeAction(xdfileActionWorkspaceNew), true
+	case !m.terminalFocused && msg.String() == "ctrl+w":
+		return m.executeAction(xdfileActionWorkspaceClose), true
+	case !m.terminalFocused && msg.String() == "ctrl+]":
+		return m.executeAction(xdfileActionWorkspaceNext), true
+	case !m.terminalFocused && msg.String() == "ctrl+[":
+		return m.executeAction(xdfileActionWorkspacePrevious), true
+	case msg.String() == "ctrl+left":
 		return m.adjustPanelSplit(-2), true
-	case "ctrl+right":
+	case msg.String() == "ctrl+right":
 		return m.adjustPanelSplit(2), true
-	case "ctrl+up":
+	case msg.String() == "ctrl+up":
 		return m.adjustTerminalHeight(1), true
-	case "ctrl+down":
+	case msg.String() == "ctrl+down":
 		return m.adjustTerminalHeight(-1), true
-	case "f1":
+	case m.keyMatches(msg, xdfileKeymapActionHelp):
 		m.openTextModal("Xdfile Manager Help", xdfileHelpText())
 		return nil, true
-	case "f2":
+	case m.keyMatches(msg, xdfileKeymapActionCommands):
 		return m.executeAction(xdfileActionCommandsMenu), true
-	case "f3":
+	case m.keyMatches(msg, xdfileKeymapActionPreview):
 		return m.executeAction(xdfileActionPreview), true
-	case "ctrl+q":
+	case m.keyMatches(msg, xdfileKeymapActionQuickView):
 		if m.terminalFocused {
 			return nil, false
 		}
 		return tea.Batch(m.noteFooterCtrlHint(), m.togglePreview()), true
-	case "f4":
+	case panelShortcutAllowed && m.keyMatches(msg, xdfileKeymapActionRename):
 		return m.executeAction(xdfileActionRename), true
-	case "f5":
+	case panelShortcutAllowed && m.keyMatches(msg, xdfileKeymapActionPanelCopy):
 		return m.executeAction(xdfileActionCopy), true
-	case "f6":
+	case panelShortcutAllowed && m.keyMatches(msg, xdfileKeymapActionPanelMove):
 		return m.executeAction(xdfileActionMove), true
-	case "f7":
+	case panelShortcutAllowed && m.keyMatches(msg, xdfileKeymapActionMkdir):
 		return m.executeAction(xdfileActionMkdir), true
-	case "f8":
+	case panelShortcutAllowed && m.keyMatches(msg, xdfileKeymapActionDelete):
 		return m.executeAction(xdfileActionDelete), true
-	case "f9":
+	case panelShortcutAllowed && m.keyMatches(msg, xdfileKeymapActionHidden):
 		return m.executeAction(xdfileActionHidden), true
-	case "ctrl+z":
+	case m.keyMatches(msg, xdfileKeymapActionUndo):
 		return m.executeAction(xdfileActionUndoDelete), true
-	case "tab":
+	case m.keyMatches(msg, xdfileKeymapActionPanelNext):
 		return m.cycleFocusForward(), true
-	case "shift+tab":
+	case m.keyMatches(msg, xdfileKeymapActionPanelPrevious):
 		return m.cycleFocusBackward(), true
-	case "esc":
+	case panelShortcutAllowed && m.keyMatches(msg, xdfileKeymapActionCopyCurrentPath):
+		return m.executeAction(xdfileActionCopyCurrentPath), true
+	case panelShortcutAllowed && m.keyMatches(msg, xdfileKeymapActionCopyCurrentDir):
+		return m.executeAction(xdfileActionCopyCurrentDirectory), true
+	case panelShortcutAllowed && m.keyMatches(msg, xdfileKeymapActionPins):
+		return m.executeAction(xdfileActionPinsMenu), true
+	case panelShortcutAllowed && m.keyMatches(msg, xdfileKeymapActionArchive):
+		return m.executeAction(xdfileActionArchive), true
+	case panelShortcutAllowed && m.keyMatches(msg, xdfileKeymapActionExtractArchive):
+		return m.executeAction(xdfileActionExtractArchive), true
+	case panelShortcutAllowed && m.keyMatches(msg, xdfileKeymapActionZoxide):
+		return m.executeAction(xdfileActionZoxideJump), true
+	case m.keyMatches(msg, xdfileKeymapActionPanelClear):
 		if m.terminalFocused {
 			return m.focusPanel(m.activePanel), true
 		}
@@ -150,25 +166,15 @@ func (m *xdfileModel) handleFileClipboardShortcut(msg tea.KeyMsg) (tea.Cmd, bool
 		return nil, false
 	}
 
-	switch msg.Type {
-	case tea.KeyCtrlShiftC:
+	switch {
+	case m.keyMatches(msg, xdfileKeymapActionClipboardCopy):
 		return m.executeAction(xdfileActionClipboardCopy), true
-	case tea.KeyCtrlX:
+	case m.keyMatches(msg, xdfileKeymapActionClipboardCut):
 		return m.executeAction(xdfileActionClipboardCut), true
-	case tea.KeyCtrlShiftV:
+	case m.keyMatches(msg, xdfileKeymapActionClipboardPaste):
 		return m.executeAction(xdfileActionPaste), true
 	}
-
-	switch msg.String() {
-	case "ctrl+shift+c":
-		return m.executeAction(xdfileActionClipboardCopy), true
-	case "ctrl+x":
-		return m.executeAction(xdfileActionClipboardCut), true
-	case "ctrl+shift+v":
-		return m.executeAction(xdfileActionPaste), true
-	default:
-		return nil, false
-	}
+	return nil, false
 }
 
 func xdfileIsFilePasteShortcut(msg tea.KeyMsg) bool {
@@ -287,14 +293,18 @@ func (m *xdfileModel) currentClipboardFilePaths() ([]string, error) {
 func (m *xdfileModel) currentClipboardPayload() ([]string, bool, error) {
 	paths, err := xdfileReadClipboardPathsFunc()
 	if err == nil && len(paths) > 0 {
-		cut, cutErr := xdfileReadClipboardCutFunc()
-		if cutErr != nil {
-			cut = false
+		if m.shouldIgnoreClipboardTextPaths(paths) {
+			paths = nil
+		} else {
+			cut, cutErr := xdfileReadClipboardCutFunc()
+			if cutErr != nil {
+				cut = false
+			}
+			if len(m.clipboardPaths) == 0 || !xdfileClipboardPathsEqual(m.clipboardPaths, paths) || m.clipboardCut != cut {
+				return paths, cut, nil
+			}
+			return append([]string(nil), m.clipboardPaths...), m.clipboardCut, nil
 		}
-		if len(m.clipboardPaths) == 0 || !xdfileClipboardPathsEqual(m.clipboardPaths, paths) || m.clipboardCut != cut {
-			return paths, cut, nil
-		}
-		return append([]string(nil), m.clipboardPaths...), m.clipboardCut, nil
 	}
 	if err == nil {
 		if virtualFiles, virtualErr := xdfileReadClipboardVirtualFilesFunc(); virtualErr == nil && len(virtualFiles) > 0 {
@@ -308,6 +318,31 @@ func (m *xdfileModel) currentClipboardPayload() ([]string, bool, error) {
 		return []string{m.clipboardPath}, m.clipboardCut, nil
 	}
 	return nil, false, err
+}
+
+func (m *xdfileModel) shouldIgnoreClipboardTextPaths(paths []string) bool {
+	if len(m.clipboardTextPaths) == 0 {
+		return false
+	}
+	if !xdfileClipboardPathsEqual(m.clipboardTextPaths, paths) {
+		return false
+	}
+	return len(m.clipboardPaths) == 0 || !xdfileClipboardPathsEqual(m.clipboardPaths, paths)
+}
+
+func xdfileClipboardTextLocalPaths(paths []string) []string {
+	localPaths := make([]string, 0, len(paths))
+	for _, value := range paths {
+		value = strings.TrimSpace(value)
+		if value == "" || xdfileIsNetBoxPath(value) || !filepath.IsAbs(value) {
+			continue
+		}
+		localPaths = append(localPaths, filepath.Clean(value))
+	}
+	if len(localPaths) == 0 {
+		return nil
+	}
+	return localPaths
 }
 
 func xdfileClipboardPathsEqual(left []string, right []string) bool {
@@ -484,6 +519,9 @@ func xdfileMenuKeyLabel(msg tea.KeyMsg) string {
 }
 
 func (m *xdfileModel) handlePanelKey(msg tea.KeyMsg) tea.Cmd {
+	if cmd, handled := m.handlePanelFilterShortcut(msg); handled {
+		return cmd
+	}
 	if cmd, handled := m.handlePanelSearchKey(msg); handled {
 		return cmd
 	}
@@ -495,20 +533,20 @@ func (m *xdfileModel) handlePanelKey(msg tea.KeyMsg) tea.Cmd {
 	rows := panel.visibleRows(m.layout.panelRects[m.activePanel].h)
 	selectionChanged := false
 
-	switch msg.Type {
-	case tea.KeyShiftUp:
+	switch {
+	case m.keyMatches(msg, xdfileKeymapActionSelectUp):
 		if panel.toggleMarkedStep(-1, rows) {
 			selectionChanged = true
 		}
-	case tea.KeyShiftDown:
+	case m.keyMatches(msg, xdfileKeymapActionSelectDown):
 		if panel.toggleMarkedStep(1, rows) {
 			selectionChanged = true
 		}
-	case tea.KeyShiftLeft:
+	case m.keyMatches(msg, xdfileKeymapActionSelectPageUp):
 		if panel.toggleRangeStep(-rows, rows) > 0 {
 			selectionChanged = true
 		}
-	case tea.KeyShiftRight:
+	case m.keyMatches(msg, xdfileKeymapActionSelectPageDown):
 		if panel.toggleRangeStep(rows, rows) > 0 {
 			selectionChanged = true
 		}
@@ -518,49 +556,51 @@ func (m *xdfileModel) handlePanelKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	switch msg.String() {
-	case "up":
+	switch {
+	case m.keyMatches(msg, xdfileKeymapActionPanelUp):
 		panel.resetRangeAnchor()
 		panel.move(-1, rows)
 		selectionChanged = true
-	case "down":
+	case m.keyMatches(msg, xdfileKeymapActionPanelDown):
 		panel.resetRangeAnchor()
 		panel.move(1, rows)
 		selectionChanged = true
-	case "pgup":
+	case m.keyMatches(msg, xdfileKeymapActionPanelPageUp):
 		panel.resetRangeAnchor()
 		panel.move(-rows, rows)
 		selectionChanged = true
-	case "pgdown":
+	case m.keyMatches(msg, xdfileKeymapActionPanelPageDown):
 		panel.resetRangeAnchor()
 		panel.move(rows, rows)
 		selectionChanged = true
-	case "left":
+	case m.keyMatches(msg, xdfileKeymapActionPanelPageLeft):
 		panel.resetRangeAnchor()
 		panel.move(-rows, rows)
 		selectionChanged = true
-	case "right":
+	case m.keyMatches(msg, xdfileKeymapActionPanelPageRight):
 		panel.resetRangeAnchor()
 		panel.move(rows, rows)
 		selectionChanged = true
-	case "home":
+	case m.keyMatches(msg, xdfileKeymapActionPanelHome):
 		panel.resetRangeAnchor()
 		panel.setCursor(0, rows)
 		selectionChanged = true
-	case "end":
+	case m.keyMatches(msg, xdfileKeymapActionPanelEnd):
 		panel.resetRangeAnchor()
 		panel.setCursor(len(panel.Entries)-1, rows)
 		selectionChanged = true
-	case "esc":
+	case m.keyMatches(msg, xdfileKeymapActionPanelClear):
 		if panel.markedCount() > 0 {
 			panel.clearMarked()
 			selectionChanged = true
 		}
-	case "enter":
+	case m.keyMatches(msg, xdfileKeymapActionPanelOpen):
 		return m.activateSelection()
-	case "r":
+	case m.keyMatches(msg, xdfileKeymapActionPanelParent):
+		return m.executeAction(xdfileActionParent)
+	case m.keyMatches(msg, xdfileKeymapActionPanelRefresh):
 		return m.executeAction(xdfileActionRefresh)
-	case "ctrl+b":
+	case msg.String() == "ctrl+b":
 		if m.quickViewActive() {
 			return m.togglePreviewBinary()
 		}
@@ -578,6 +618,15 @@ func (m *xdfileModel) handleManagedTerminalBoundKey(msg tea.KeyMsg) (tea.Cmd, bo
 
 	if m.terminal.Busy {
 		return nil, false
+	}
+
+	if m.managedTerminalHistorySearchActive() {
+		return m.handleTerminalHistorySearchKey(msg), true
+	}
+
+	if msg.String() == "ctrl+r" {
+		m.startTerminalHistorySearch()
+		return nil, true
 	}
 
 	if m.managedTerminalPopupVisible() {
@@ -698,6 +747,15 @@ func (m *xdfileModel) handleTerminalKey(msg tea.KeyMsg) tea.Cmd {
 		return cmd
 	}
 
+	if m.managedTerminalHistorySearchActive() {
+		return m.handleTerminalHistorySearchKey(msg)
+	}
+
+	if !m.terminal.Busy && msg.String() == "ctrl+r" {
+		m.startTerminalHistorySearch()
+		return nil
+	}
+
 	if m.managedTerminalPopupVisible() {
 		switch msg.String() {
 		case "esc":
@@ -752,6 +810,32 @@ func (m *xdfileModel) handleTerminalKey(msg tea.KeyMsg) tea.Cmd {
 	return cmd
 }
 
+func (m *xdfileModel) handleTerminalHistorySearchKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "ctrl+r", "down":
+		m.moveTerminalHistorySearch(1)
+		return nil
+	case "up":
+		m.moveTerminalHistorySearch(-1)
+		return nil
+	case "enter":
+		m.acceptTerminalHistorySearch()
+		return nil
+	case "esc":
+		m.cancelTerminalHistorySearch()
+		return nil
+	}
+
+	if !xdfileManagedTerminalInputKey(msg, m.terminal.Input.Value()) {
+		return nil
+	}
+
+	var cmd tea.Cmd
+	m.terminal.Input, cmd = m.terminal.Input.Update(msg)
+	m.updateTerminalHistorySearchQuery(m.terminal.Input.Value())
+	return cmd
+}
+
 func (m *xdfileModel) handleModalKey(msg tea.KeyMsg) tea.Cmd {
 	switch m.modal.Kind {
 	case xdfileModalText:
@@ -788,7 +872,16 @@ func (m *xdfileModel) handleModalKey(msg tea.KeyMsg) tea.Cmd {
 			if m.modal.Action == xdfileActionPreview {
 				m.closeModal()
 			}
-		case "enter", "esc", "q":
+		case "c":
+			if m.modal.Action == xdfileActionMD5Result {
+				return m.copyMD5ChecksumFromModal()
+			}
+		case "enter":
+			if m.modal.Action == xdfileActionBatchRenamePreview {
+				return m.applyModal()
+			}
+			return m.closeModalAndResumeFileQueue()
+		case "esc", "q":
 			return m.closeModalAndResumeFileQueue()
 		}
 		return nil
@@ -821,6 +914,14 @@ func (m *xdfileModel) handleModalKey(msg tea.KeyMsg) tea.Cmd {
 			if len(m.modal.ChoiceItems) > 0 {
 				m.modal.ChoiceCursor = (m.modal.ChoiceCursor + 1) % len(m.modal.ChoiceItems)
 			}
+		case "c":
+			if m.modal.Action == xdfileActionTerminalHistory {
+				return m.copySelectedTerminalHistoryCommand()
+			}
+		case "p":
+			if m.modal.Action == xdfileActionTerminalHistory {
+				return m.pasteSelectedTerminalHistoryCommand()
+			}
 		case "enter":
 			if len(m.modal.ChoiceItems) == 0 {
 				return nil
@@ -828,6 +929,7 @@ func (m *xdfileModel) handleModalKey(msg tea.KeyMsg) tea.Cmd {
 			return m.executeAction(m.modal.ChoiceItems[m.modal.ChoiceCursor].Action)
 		case "esc":
 			if m.modal.Action == xdfileActionPasteConflictPrompt {
+				m.cleanupPendingClipboardPasteCache(m.pendingClipboardPaste)
 				m.pendingClipboardPaste = nil
 				m.setStatus("Paste canceled")
 			}

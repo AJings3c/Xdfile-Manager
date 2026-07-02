@@ -17,22 +17,44 @@ type xdfileExclusiveTUICommand struct {
 	MouseInput xdfilePTYMouseInputMode
 }
 
-var xdfileExclusiveTUICommandNames = xdfileStringSet{
-	"btm":     {},
-	"fzf":     {},
-	"helix":   {},
-	"hx":      {},
-	"k9s":     {},
-	"less":    {},
-	"lf":      {},
-	"lazygit": {},
-	"micro":   {},
-	"nnn":     {},
-	"nvim":    {},
-	"tig":     {},
-	"vim":     {},
-	"vxdbg":   {},
-	"yazi":    {},
+type xdfileExclusiveTUICommandRule struct {
+	Names      xdfileStringSet
+	Predicate  func(args []string) bool
+	Args       func(args []string) []string
+	MouseInput xdfilePTYMouseInputMode
+}
+
+var xdfileExclusiveTUICommandRules = []xdfileExclusiveTUICommandRule{
+	{
+		Names:      xdfileStringSet{"vim": {}},
+		Predicate:  xdfileExclusiveTUIVimArgsInteractive,
+		Args:       xdfileExclusiveTUIVimCommandArgs,
+		MouseInput: xdfilePTYMouseInputNative,
+	},
+	{
+		Names:      xdfileStringSet{"nvim": {}},
+		Predicate:  xdfileExclusiveTUINvimArgsInteractive,
+		MouseInput: xdfilePTYMouseInputBoth,
+	},
+	{
+		Names: xdfileStringSet{
+			"btm":     {},
+			"fzf":     {},
+			"helix":   {},
+			"hx":      {},
+			"k9s":     {},
+			"less":    {},
+			"lf":      {},
+			"lazygit": {},
+			"micro":   {},
+			"nnn":     {},
+			"tig":     {},
+			"vxdbg":   {},
+			"yazi":    {},
+		},
+		Predicate:  xdfileExclusiveTUIDefaultArgsInteractive,
+		MouseInput: xdfilePTYMouseInputBoth,
+	},
 }
 
 var xdfileStartExclusiveTerminalFunc = xdfileStartExclusiveTerminalCmd
@@ -73,11 +95,11 @@ func xdfileResolveExclusiveTUICommandFields(dir string, fields []string, depth i
 		}
 
 		base = strings.TrimSuffix(base, filepath.Ext(base))
-		if xdfileExclusiveTUICommandNames.has(base) {
+		if rule, ok := xdfileExclusiveTUICommandRuleFor(base, fields[1:]); ok {
 			return xdfileExclusiveTUICommand{
 				Path:       path,
-				Args:       xdfileExclusiveTUICommandArgs(base, fields[1:]),
-				MouseInput: xdfileExclusiveTUIMouseInputMode(base),
+				Args:       rule.commandArgs(fields[1:]),
+				MouseInput: rule.MouseInput,
 			}, true
 		}
 	}
@@ -85,11 +107,29 @@ func xdfileResolveExclusiveTUICommandFields(dir string, fields []string, depth i
 	return xdfileExclusiveTUICommand{}, false
 }
 
-func xdfileExclusiveTUICommandArgs(base string, args []string) []string {
-	args = append([]string(nil), args...)
-	if !strings.EqualFold(base, "vim") {
-		return args
+func xdfileExclusiveTUICommandRuleFor(base string, args []string) (xdfileExclusiveTUICommandRule, bool) {
+	base = strings.ToLower(strings.TrimSpace(base))
+	for _, rule := range xdfileExclusiveTUICommandRules {
+		if !rule.Names.has(base) {
+			continue
+		}
+		if rule.Predicate != nil && !rule.Predicate(args) {
+			return xdfileExclusiveTUICommandRule{}, false
+		}
+		return rule, true
 	}
+	return xdfileExclusiveTUICommandRule{}, false
+}
+
+func (r xdfileExclusiveTUICommandRule) commandArgs(args []string) []string {
+	if r.Args != nil {
+		return r.Args(args)
+	}
+	return append([]string(nil), args...)
+}
+
+func xdfileExclusiveTUIVimCommandArgs(args []string) []string {
+	args = append([]string(nil), args...)
 	if xdfileExclusiveTUICommandHasMouseArg(args) {
 		return args
 	}
@@ -97,6 +137,36 @@ func xdfileExclusiveTUICommandArgs(base string, args []string) []string {
 	prefixed := make([]string, 0, len(args)+2)
 	prefixed = append(prefixed, "-c", "silent! if exists('&mouse') | set mouse=a | endif")
 	return append(prefixed, args...)
+}
+
+func xdfileExclusiveTUIVimArgsInteractive(args []string) bool {
+	return !xdfileExclusiveTUIHasNonInteractiveArg(args, "--version", "--help", "-h")
+}
+
+func xdfileExclusiveTUINvimArgsInteractive(args []string) bool {
+	return !xdfileExclusiveTUIHasNonInteractiveArg(args, "--headless", "--version", "--help", "-h")
+}
+
+func xdfileExclusiveTUIDefaultArgsInteractive(args []string) bool {
+	return !xdfileExclusiveTUIHasNonInteractiveArg(args, "--version", "--help", "-h")
+}
+
+func xdfileExclusiveTUIHasNonInteractiveArg(args []string, names ...string) bool {
+	for _, arg := range args {
+		arg = strings.ToLower(strings.TrimSpace(arg))
+		if arg == "" {
+			continue
+		}
+		if arg == "--" {
+			return false
+		}
+		for _, name := range names {
+			if arg == name || strings.HasPrefix(arg, name+"=") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func xdfileExclusiveTUICommandHasMouseArg(args []string) bool {
@@ -110,13 +180,6 @@ func xdfileExclusiveTUICommandHasMouseArg(args []string) bool {
 		}
 	}
 	return false
-}
-
-func xdfileExclusiveTUIMouseInputMode(base string) xdfilePTYMouseInputMode {
-	if strings.EqualFold(base, "vim") {
-		return xdfilePTYMouseInputNative
-	}
-	return xdfilePTYMouseInputBoth
 }
 
 func xdfileResolveExclusiveTUICmdWrapper(dir string, args []string, depth int) (xdfileExclusiveTUICommand, bool) {
@@ -267,7 +330,9 @@ func (m *xdfileModel) finishExclusiveTerminal(err error) {
 	}
 
 	command := strings.TrimSpace(m.terminal.Exclusive.Command)
+	cwd := strings.TrimSpace(m.terminal.Exclusive.Cwd)
 	m.terminal.Exclusive = xdfileExclusiveTerminal{}
+	m.applyTerminalCwd(cwd)
 	m.reloadAllPanels()
 	m.refreshManagedTerminalSuggestions()
 	m.focusManagedTerminalInput()

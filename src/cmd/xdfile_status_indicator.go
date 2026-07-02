@@ -82,12 +82,35 @@ func (m *xdfileModel) renderStatusText(width int) string {
 	if progress := m.fileOperationProgressStatus(); progress != "" {
 		text = strings.TrimSpace(text + " " + progress)
 	}
+	text = xdfileCompactStatusText(text)
 	content := symbol + " " + text
 	style := xdfileStatusOKStyle
 	if m.statusError {
 		style = xdfileStatusErrStyle
 	}
 	return style.Render(charmansi.Truncate(content, width, "..."))
+}
+
+func xdfileCompactStatusText(text string) string {
+	text = strings.TrimSpace(text)
+	switch text {
+	case "Press Enter to confirm or Esc to cancel":
+		return "Enter confirm | Esc cancel"
+	case "Press Enter to delete or Esc to cancel":
+		return "Enter delete | Esc cancel"
+	case "Press Enter to quit or Esc to cancel":
+		return "Enter quit | Esc cancel"
+	case "Choose Replace, Skip, Keep both, or Apply all":
+		return "Choose conflict action"
+	case "Wait for the current background task to finish":
+		return "Busy, wait"
+	case "Local/remote move is unavailable; use F5 copy only":
+		return "Move unavailable across SSH"
+	case "Remote preview is unavailable; copy it locally first":
+		return "Remote preview unavailable"
+	default:
+		return text
+	}
 }
 
 func (m *xdfileModel) commandStateLabel() string {

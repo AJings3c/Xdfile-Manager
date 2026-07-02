@@ -2,11 +2,18 @@ package cmd
 
 import (
 	"image/color"
+	"math"
+	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/pelletier/go-toml/v2"
+	variable "github.com/s0x401/xdfile-manager/src/config"
+	"github.com/s0x401/xdfile-manager/src/internal/common"
 )
 
 type xdfileTheme struct {
@@ -38,12 +45,19 @@ type xdfileTheme struct {
 	TerminalCursorBackground string
 }
 
+type xdfileThemeToken struct {
+	Role  string
+	Value string
+}
+
 const (
 	xdfileThemePersona3Name       = "persona3"
 	xdfileThemePersona3ReloadName = "persona3reload"
 	xdfileThemePersona3KotoneName = "persona3kotone"
 	xdfileThemePersona4Name       = "persona4"
 	xdfileThemePersona5Name       = "persona5"
+
+	xdfileThemeSelectActionPrefix = "theme_select:"
 )
 
 var xdfileCurrentTheme = xdfilePersona3Theme()
@@ -207,23 +221,117 @@ func xdfilePersona5Theme() xdfileTheme {
 	}
 }
 
+func xdfilePersonaThemes() []xdfileTheme {
+	return []xdfileTheme{
+		xdfilePersona3Theme(),
+		xdfilePersona3ReloadTheme(),
+		xdfilePersona3KotoneTheme(),
+		xdfilePersona4Theme(),
+		xdfilePersona5Theme(),
+	}
+}
+
 func xdfileThemeByName(name string) xdfileTheme {
+	themes := xdfileThemeCatalog(variable.ThemeFolder)
+	if theme, ok := xdfileThemeFromCatalog(name, themes); ok {
+		return theme
+	}
+	return xdfilePersona3Theme()
+}
+
+func xdfileThemeCatalog(themeDir string) []xdfileTheme {
+	themes := xdfilePersonaThemes()
+	seen := make(map[string]struct{}, len(themes))
+	for _, theme := range themes {
+		seen[theme.Name] = struct{}{}
+	}
+
+	for _, theme := range xdfileLoadTOMLThemes(themeDir) {
+		if _, ok := seen[theme.Name]; ok {
+			continue
+		}
+		seen[theme.Name] = struct{}{}
+		themes = append(themes, theme)
+	}
+	return themes
+}
+
+func xdfileLoadTOMLThemes(themeDir string) []xdfileTheme {
+	themeDir = strings.TrimSpace(themeDir)
+	if themeDir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(themeDir)
+	if err != nil {
+		return nil
+	}
+
+	themes := make([]xdfileTheme, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".toml") {
+			continue
+		}
+		theme, err := xdfileLoadTOMLThemeFile(filepath.Join(themeDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		themes = append(themes, theme)
+	}
+	sort.SliceStable(themes, func(i int, j int) bool {
+		return strings.ToLower(themes[i].Name) < strings.ToLower(themes[j].Name)
+	})
+	return themes
+}
+
+func xdfileLoadTOMLThemeFile(path string) (xdfileTheme, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return xdfileTheme{}, err
+	}
+	var legacy common.ThemeType
+	if err := toml.Unmarshal(data, &legacy); err != nil {
+		return xdfileTheme{}, err
+	}
+	name := xdfileNormalizeThemeName(strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
+	return xdfileTOMLThemeFromLegacy(name, legacy), nil
+}
+
+func xdfileThemeFromCatalog(name string, themes []xdfileTheme) (xdfileTheme, bool) {
+	normalized := xdfileNormalizeThemeName(name)
+	for _, theme := range themes {
+		if theme.Name == normalized {
+			return theme, true
+		}
+	}
+	return xdfileTheme{}, false
+}
+
+func xdfilePersonaThemeByName(name string) (xdfileTheme, bool) {
 	switch xdfileNormalizeThemeName(name) {
 	case xdfileThemePersona5Name:
-		return xdfilePersona5Theme()
+		return xdfilePersona5Theme(), true
 	case xdfileThemePersona4Name:
-		return xdfilePersona4Theme()
+		return xdfilePersona4Theme(), true
 	case xdfileThemePersona3KotoneName:
-		return xdfilePersona3KotoneTheme()
+		return xdfilePersona3KotoneTheme(), true
 	case xdfileThemePersona3ReloadName:
-		return xdfilePersona3ReloadTheme()
+		return xdfilePersona3ReloadTheme(), true
+	case xdfileThemePersona3Name:
+		return xdfilePersona3Theme(), true
 	default:
-		return xdfilePersona3Theme()
+		return xdfileTheme{}, false
 	}
 }
 
 func xdfileNormalizeThemeName(name string) string {
-	switch strings.ToLower(strings.TrimSpace(name)) {
+	cleaned := strings.TrimSpace(name)
+	cleaned = strings.TrimSuffix(cleaned, ".toml")
+	cleaned = strings.TrimSuffix(cleaned, ".TOML")
+	cleaned = filepath.Base(strings.ReplaceAll(cleaned, "\\", string(filepath.Separator)))
+	cleaned = strings.ToLower(strings.TrimSpace(cleaned))
+	switch cleaned {
+	case "", xdfileThemePersona3Name, "persona-3", "p3":
+		return xdfileThemePersona3Name
 	case xdfileThemePersona5Name, "persona-5", "p5":
 		return xdfileThemePersona5Name
 	case xdfileThemePersona4Name, "persona-4", "p4":
@@ -233,7 +341,7 @@ func xdfileNormalizeThemeName(name string) string {
 	case xdfileThemePersona3KotoneName, "persona3-kotone", "p3p", "kotone", "shiomi":
 		return xdfileThemePersona3KotoneName
 	default:
-		return xdfileThemePersona3Name
+		return xdfileSanitizeThemeName(cleaned)
 	}
 }
 
@@ -248,7 +356,7 @@ func xdfileThemeDisplayName(name string) string {
 	case xdfileThemePersona3ReloadName:
 		return "Persona 3 Reload"
 	default:
-		return "Persona 3"
+		return xdfileHumanizeThemeName(name)
 	}
 }
 
@@ -258,6 +366,272 @@ func xdfileThemeMenuLabel(name string, current string) string {
 		return label + " (Current)"
 	}
 	return label
+}
+
+func xdfileThemeSelectAction(name string) xdfileAction {
+	return xdfileAction(xdfileThemeSelectActionPrefix + xdfileNormalizeThemeName(name))
+}
+
+func xdfileParseThemeSelectAction(action xdfileAction) (string, bool) {
+	value := string(action)
+	if !strings.HasPrefix(value, xdfileThemeSelectActionPrefix) {
+		return "", false
+	}
+	name := xdfileNormalizeThemeName(strings.TrimPrefix(value, xdfileThemeSelectActionPrefix))
+	if name == "" {
+		return "", false
+	}
+	return name, true
+}
+
+func xdfileThemeMenuAction(name string) xdfileAction {
+	switch xdfileNormalizeThemeName(name) {
+	case xdfileThemePersona3Name:
+		return xdfileActionThemePersona3
+	case xdfileThemePersona3ReloadName:
+		return xdfileActionThemePersona3Reload
+	case xdfileThemePersona3KotoneName:
+		return xdfileActionThemePersona3Kotone
+	case xdfileThemePersona4Name:
+		return xdfileActionThemePersona4
+	case xdfileThemePersona5Name:
+		return xdfileActionThemePersona5
+	default:
+		return xdfileThemeSelectAction(name)
+	}
+}
+
+func xdfileSanitizeThemeName(name string) string {
+	var b strings.Builder
+	previousDash := false
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '.':
+			b.WriteRune(r)
+			previousDash = false
+		case r == '-':
+			if !previousDash {
+				b.WriteRune(r)
+				previousDash = true
+			}
+		case r == ' ':
+			if !previousDash {
+				b.WriteByte('-')
+				previousDash = true
+			}
+		}
+	}
+	cleaned := strings.Trim(b.String(), "-._")
+	if cleaned == "" {
+		return xdfileThemePersona3Name
+	}
+	return cleaned
+}
+
+func xdfileHumanizeThemeName(name string) string {
+	name = xdfileNormalizeThemeName(name)
+	if _, ok := xdfilePersonaThemeByName(name); ok {
+		switch name {
+		case xdfileThemePersona5Name:
+			return "Persona 5"
+		case xdfileThemePersona4Name:
+			return "Persona 4"
+		case xdfileThemePersona3KotoneName:
+			return "Persona 3 Kotone"
+		case xdfileThemePersona3ReloadName:
+			return "Persona 3 Reload"
+		default:
+			return "Persona 3"
+		}
+	}
+	parts := strings.FieldsFunc(name, func(r rune) bool {
+		return r == '-' || r == '_' || r == '.'
+	})
+	if len(parts) == 0 {
+		return name
+	}
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+	}
+	return strings.Join(parts, " ")
+}
+
+func xdfileTOMLThemeFromLegacy(name string, legacy common.ThemeType) xdfileTheme {
+	fallback := xdfilePersona3Theme()
+	gradient := func(index int) string {
+		if index < 0 || index >= len(legacy.GradientColor) {
+			return ""
+		}
+		return legacy.GradientColor[index]
+	}
+	pick := func(fallback string, values ...string) string {
+		for _, value := range values {
+			if colorValue, ok := xdfileNormalizeThemeColor(value); ok {
+				return colorValue
+			}
+		}
+		return fallback
+	}
+
+	theme := xdfileTheme{
+		Name:                     xdfileNormalizeThemeName(name),
+		BG:                       pick(fallback.BG, legacy.FullScreenBG, legacy.FilePanelBG, legacy.ModalBG),
+		Surface:                  pick(fallback.Surface, legacy.FilePanelBG, legacy.FullScreenBG),
+		Surface2:                 pick(fallback.Surface2, legacy.FooterBG, legacy.ModalBG, legacy.SidebarBG, legacy.FilePanelBG),
+		Border:                   pick(fallback.Border, legacy.FilePanelBorder, legacy.FooterBorder, legacy.SidebarBorder),
+		Accent:                   pick(fallback.Accent, legacy.FilePanelBorderActive, legacy.FilePanelTopDirectoryIcon, legacy.DirectoryIconColor, gradient(0), legacy.FooterBorderActive, legacy.ModalBorderActive),
+		Accent2:                  pick(fallback.Accent2, legacy.FilePanelTopPath, legacy.HelpMenuTitle, gradient(1), legacy.FooterBorderActive, legacy.ModalBorderActive),
+		Text:                     pick(fallback.Text, legacy.FilePanelFG, legacy.FullScreenFG, legacy.ModalFG),
+		Dim:                      pick(fallback.Dim, legacy.Hint, legacy.FooterBorder, legacy.SidebarDivider, legacy.Cancel),
+		Success:                  pick(fallback.Success, legacy.Correct, legacy.ModalConfirmBG, gradient(0)),
+		Danger:                   pick(fallback.Danger, legacy.Error, legacy.Cancel, legacy.ModalCancelBG),
+		Highlight:                pick(fallback.Highlight, legacy.SidebarItemSelectedBG, legacy.FilePanelItemSelectedBG, legacy.ModalBG, legacy.FooterBG),
+		SelectionActiveBG:        pick(fallback.SelectionActiveBG, legacy.FilePanelItemSelectedBG, legacy.SidebarItemSelectedBG, legacy.ModalConfirmBG, legacy.FilePanelBorderActive, legacy.FilePanelTopPath),
+		SelectionActiveFG:        pick(fallback.SelectionActiveFG, legacy.FilePanelItemSelectedFG, legacy.SidebarItemSelectedFG, legacy.ModalConfirmFG, legacy.FilePanelFG, legacy.FullScreenFG),
+		SelectionInactiveBG:      pick(fallback.SelectionInactiveBG, legacy.SidebarItemSelectedBG, legacy.FilePanelItemSelectedBG, legacy.ModalBG, legacy.FooterBG),
+		SelectionInactiveFG:      pick(fallback.SelectionInactiveFG, legacy.SidebarItemSelectedFG, legacy.FilePanelItemSelectedFG, legacy.FilePanelFG, legacy.FullScreenFG),
+		MarkedActiveBG:           pick(fallback.MarkedActiveBG, legacy.ModalConfirmBG, legacy.SidebarTitle, legacy.FilePanelBorderActive, gradient(0)),
+		MarkedActiveFG:           pick(fallback.MarkedActiveFG, legacy.ModalConfirmFG, legacy.FilePanelFG, legacy.FullScreenFG),
+		MarkedInactiveBG:         pick(fallback.MarkedInactiveBG, legacy.ModalCancelBG, legacy.SidebarDivider, legacy.FooterBG, legacy.FilePanelBG),
+		MarkedInactiveFG:         pick(fallback.MarkedInactiveFG, legacy.ModalCancelFG, legacy.FooterFG, legacy.FilePanelFG, legacy.FullScreenFG),
+		TerminalPromptPath:       pick(fallback.TerminalPromptPath, legacy.FilePanelTopPath, legacy.HelpMenuTitle, legacy.Hint),
+		TerminalInputCursor:      pick(fallback.TerminalInputCursor, legacy.Cursor, legacy.FilePanelTopDirectoryIcon, legacy.Correct),
+		TerminalSuggestion:       pick(fallback.TerminalSuggestion, legacy.Hint, legacy.FooterBorder, legacy.SidebarDivider),
+		TerminalSuggestionCursor: pick(fallback.TerminalSuggestionCursor, legacy.HelpMenuHotkey, legacy.Cursor, legacy.FilePanelTopDirectoryIcon),
+		TerminalCursorForeground: pick(fallback.TerminalCursorForeground, legacy.FullScreenBG, legacy.FilePanelBG, legacy.ModalBG),
+		TerminalCursorBackground: pick(fallback.TerminalCursorBackground, legacy.Cursor, legacy.FilePanelTopDirectoryIcon, legacy.Correct),
+	}
+
+	if xdfileThemeSameColor(theme.SelectionActiveBG, theme.Surface) || xdfileThemeSameColor(theme.SelectionActiveBG, theme.BG) {
+		theme.SelectionActiveBG = pick(fallback.SelectionActiveBG, legacy.ModalConfirmBG, legacy.FilePanelBorderActive, legacy.FilePanelTopPath, legacy.Cursor)
+	}
+	if xdfileThemeSameColor(theme.SelectionInactiveBG, theme.Surface) || xdfileThemeSameColor(theme.SelectionInactiveBG, theme.BG) {
+		theme.SelectionInactiveBG = pick(fallback.SelectionInactiveBG, legacy.ModalCancelBG, legacy.SidebarDivider, legacy.FooterBorder, legacy.Hint)
+	}
+	if xdfileThemeSameColor(theme.Highlight, theme.Surface) || xdfileThemeSameColor(theme.Highlight, theme.BG) {
+		theme.Highlight = pick(fallback.Highlight, legacy.ModalBG, legacy.FooterBorderActive, legacy.Hint, legacy.FilePanelBorder)
+	}
+
+	xdfileGuardThemeContrast(&theme, fallback)
+	return theme
+}
+
+func xdfileNormalizeThemeColor(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if len(value) != 7 || value[0] != '#' {
+		return "", false
+	}
+	for _, r := range value[1:] {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return "", false
+		}
+	}
+	return strings.ToUpper(value), true
+}
+
+func xdfileThemeSameColor(a string, b string) bool {
+	a, okA := xdfileNormalizeThemeColor(a)
+	b, okB := xdfileNormalizeThemeColor(b)
+	return okA && okB && a == b
+}
+
+func xdfileGuardThemeContrast(theme *xdfileTheme, fallback xdfileTheme) {
+	if xdfileThemeContrastRatio(theme.Text, theme.Surface) < 4.5 {
+		theme.Text = fallback.Text
+		theme.Surface = fallback.Surface
+	}
+	if xdfileThemeContrastRatio(theme.SelectionActiveFG, theme.SelectionActiveBG) < 4.5 {
+		theme.SelectionActiveFG = fallback.SelectionActiveFG
+		theme.SelectionActiveBG = fallback.SelectionActiveBG
+	}
+	if xdfileThemeContrastRatio(theme.SelectionInactiveFG, theme.SelectionInactiveBG) < 3.0 {
+		theme.SelectionInactiveFG = fallback.SelectionInactiveFG
+		theme.SelectionInactiveBG = fallback.SelectionInactiveBG
+	}
+	if xdfileThemeContrastRatio(theme.MarkedActiveFG, theme.MarkedActiveBG) < 3.0 {
+		theme.MarkedActiveFG = fallback.MarkedActiveFG
+		theme.MarkedActiveBG = fallback.MarkedActiveBG
+	}
+	if xdfileThemeContrastRatio(theme.MarkedInactiveFG, theme.MarkedInactiveBG) < 3.0 {
+		theme.MarkedInactiveFG = fallback.MarkedInactiveFG
+		theme.MarkedInactiveBG = fallback.MarkedInactiveBG
+	}
+	if xdfileThemeContrastRatio(theme.TerminalCursorForeground, theme.TerminalCursorBackground) < 3.0 {
+		theme.TerminalCursorForeground = fallback.TerminalCursorForeground
+		theme.TerminalCursorBackground = fallback.TerminalCursorBackground
+	}
+}
+
+func xdfileThemeContrastRatio(foreground string, background string) float64 {
+	fg, okFg := xdfileParseThemeHexColor(foreground)
+	bg, okBg := xdfileParseThemeHexColor(background)
+	if !okFg || !okBg {
+		return 0
+	}
+	fgLum := xdfileThemeRelativeLuminance(fg)
+	bgLum := xdfileThemeRelativeLuminance(bg)
+	if fgLum < bgLum {
+		fgLum, bgLum = bgLum, fgLum
+	}
+	return (fgLum + 0.05) / (bgLum + 0.05)
+}
+
+func xdfileParseThemeHexColor(value string) (color.RGBA, bool) {
+	normalized, ok := xdfileNormalizeThemeColor(value)
+	if !ok {
+		return color.RGBA{}, false
+	}
+	r, errR := strconv.ParseUint(normalized[1:3], 16, 8)
+	g, errG := strconv.ParseUint(normalized[3:5], 16, 8)
+	b, errB := strconv.ParseUint(normalized[5:7], 16, 8)
+	if errR != nil || errG != nil || errB != nil {
+		return color.RGBA{}, false
+	}
+	return color.RGBA{R: uint8(r), G: uint8(g), B: uint8(b), A: 0xff}, true
+}
+
+func xdfileThemeRelativeLuminance(c color.RGBA) float64 {
+	channel := func(value uint8) float64 {
+		v := float64(value) / 255
+		if v <= 0.03928 {
+			return v / 12.92
+		}
+		return math.Pow((v+0.055)/1.055, 2.4)
+	}
+	return 0.2126*channel(c.R) + 0.7152*channel(c.G) + 0.0722*channel(c.B)
+}
+
+func xdfileThemeTokenTable(theme xdfileTheme) []xdfileThemeToken {
+	return []xdfileThemeToken{
+		{Role: "bg", Value: theme.BG},
+		{Role: "surface", Value: theme.Surface},
+		{Role: "surface-2", Value: theme.Surface2},
+		{Role: "border", Value: theme.Border},
+		{Role: "accent", Value: theme.Accent},
+		{Role: "accent-2", Value: theme.Accent2},
+		{Role: "text", Value: theme.Text},
+		{Role: "dim", Value: theme.Dim},
+		{Role: "success", Value: theme.Success},
+		{Role: "danger", Value: theme.Danger},
+		{Role: "highlight", Value: theme.Highlight},
+		{Role: "selection-active-bg", Value: theme.SelectionActiveBG},
+		{Role: "selection-active-fg", Value: theme.SelectionActiveFG},
+		{Role: "selection-inactive-bg", Value: theme.SelectionInactiveBG},
+		{Role: "selection-inactive-fg", Value: theme.SelectionInactiveFG},
+		{Role: "marked-active-bg", Value: theme.MarkedActiveBG},
+		{Role: "marked-active-fg", Value: theme.MarkedActiveFG},
+		{Role: "marked-inactive-bg", Value: theme.MarkedInactiveBG},
+		{Role: "marked-inactive-fg", Value: theme.MarkedInactiveFG},
+		{Role: "terminal-prompt-path", Value: theme.TerminalPromptPath},
+		{Role: "terminal-input-cursor", Value: theme.TerminalInputCursor},
+		{Role: "terminal-suggestion", Value: theme.TerminalSuggestion},
+		{Role: "terminal-suggestion-cursor", Value: theme.TerminalSuggestionCursor},
+		{Role: "terminal-cursor-fg", Value: theme.TerminalCursorForeground},
+		{Role: "terminal-cursor-bg", Value: theme.TerminalCursorBackground},
+	}
 }
 
 func xdfileApplyTheme(theme xdfileTheme) {
@@ -334,7 +708,10 @@ func xdfileApplyTheme(theme xdfileTheme) {
 		Foreground(xdfileColorAccent)
 	xdfileMenuItemDisabledStyle = lipgloss.NewStyle().
 		Foreground(xdfileColorDim)
-	xdfileModalTitleStyle = lipgloss.NewStyle().Foreground(xdfileColorAccent)
+	xdfileModalTitleStyle = lipgloss.NewStyle().
+		Foreground(xdfileColorAccent).
+		Background(xdfileColorSurface).
+		Bold(true)
 
 	xdfileSelectedLineActiveStyle = lipgloss.NewStyle().
 		Foreground(xdfileColorSelectionActiveFG).
@@ -395,6 +772,7 @@ func xdfileApplyTheme(theme xdfileTheme) {
 		Padding(0, 0)
 	xdfileModalBorderStyle = lipgloss.NewStyle().
 		Foreground(xdfileColorText).
+		Background(xdfileColorSurface).
 		Border(lipgloss.ThickBorder()).
 		BorderForeground(xdfileColorAccent2)
 	xdfileMenuBorderStyle = lipgloss.NewStyle().

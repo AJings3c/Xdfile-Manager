@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	charmansi "github.com/charmbracelet/x/ansi"
 	iconconfig "github.com/s0x401/xdfile-manager/src/config/icon"
+	"github.com/s0x401/xdfile-manager/src/internal/common"
 	filepreview "github.com/s0x401/xdfile-manager/src/pkg/file_preview"
 	stringfunction "github.com/s0x401/xdfile-manager/src/pkg/string_function"
 )
@@ -16,8 +17,13 @@ func (m *xdfileModel) renderHeader() string {
 	menuBar, menuHits := m.renderMenuBar(0)
 	m.layout.menuButtons = menuHits
 
-	leftInfo := menuBar
 	rightReserve := max(24, m.width/3)
+	leftInfo := menuBar
+	leftReserve := max(0, m.width-rightReserve-1)
+	tabWidth := leftReserve - lipgloss.Width(menuBar) - 1
+	if tabWidth >= 8 {
+		leftInfo += " " + xdfileDimStyle.Render(m.workspaceHeaderLabel(tabWidth))
+	}
 	panelLabel := xdfileTagStyle.Render(m.panels[m.activePanel].Label)
 	pathWidth := max(12, rightReserve-lipgloss.Width(panelLabel)-1)
 	rightInfo := panelLabel + " " +
@@ -87,6 +93,7 @@ func (m *xdfileModel) renderOpenMenu() string {
 		}
 		contentWidth = max(contentWidth, itemWidth+4)
 	}
+	contentWidth = xdfileMenuContentWidth(contentWidth, m.width)
 
 	titleLines := 0
 	if menu.Action == xdfileActionCommandsMenu {
@@ -145,7 +152,7 @@ func xdfileRenderCommandsMenuTitle(width int, label string) string {
 }
 
 func xdfileRenderMenuItem(item xdfileButton, width int, selected bool, hovered bool) string {
-	content := xdfileJoinLeftRight(item.Label, item.Key, width)
+	content := xdfileJoinLeftRightPreserveRight(item.Label, item.Key, width, lipgloss.Width(item.Key)+1)
 	switch {
 	case item.Disabled:
 		return xdfileMenuItemDisabledStyle.Width(width).Render(content)
@@ -174,7 +181,33 @@ func (m *xdfileModel) renderFooter() string {
 		previewLabel = "Quick view"
 	}
 
-	buttons := []xdfileButton{
+	buttons := xdfileFooterButtons(previewLabel, false)
+	if m.footerShowsCtrlHints() {
+		buttons = xdfileFooterButtons(previewLabel, true)
+	}
+	line1, hits := m.renderFunctionButtons(buttons, m.height-1)
+	m.layout.footerButtons = hits
+
+	return xdfileWrapANSIRender(lipgloss.JoinVertical(
+		lipgloss.Left,
+		xdfileFooterLineStyle.Width(m.width).Render(line0),
+		xdfileFooterLineStyle.Width(m.width).Render(line1),
+	))
+}
+
+func xdfileFooterButtons(previewLabel string, ctrlHints bool) []xdfileButton {
+	if ctrlHints {
+		return []xdfileButton{
+			{Action: xdfileActionPreview, Key: "Ctrl+Q", Label: previewLabel},
+			{Action: xdfileActionSortName, Key: "Ctrl+3", Label: "Name"},
+			{Action: xdfileActionSortExt, Key: "Ctrl+4", Label: "Ext"},
+			{Action: xdfileActionClipboardCopy, Key: "Ctrl+Shift+C", Label: "Copy"},
+			{Action: xdfileActionClipboardCut, Key: "Ctrl+X", Label: "Cut"},
+			{Action: xdfileActionPaste, Key: "Ctrl+Shift+V", Label: "Paste"},
+			{Action: xdfileActionUndoDelete, Key: "Ctrl+Z", Label: "Undo"},
+		}
+	}
+	return []xdfileButton{
 		{Action: xdfileActionHelp, Key: "F1", Label: "Help"},
 		{Action: xdfileActionCommandsMenu, Key: "F2", Label: "Commands"},
 		{Action: xdfileActionPreview, Key: "F3", Label: previewLabel},
@@ -186,25 +219,6 @@ func (m *xdfileModel) renderFooter() string {
 		{Action: xdfileActionHidden, Key: "F9", Label: "Hidden"},
 		{Action: xdfileActionQuit, Key: "F10", Label: "Quit"},
 	}
-	if m.footerShowsCtrlHints() {
-		buttons = []xdfileButton{
-			{Action: xdfileActionPreview, Key: "Ctrl+Q", Label: previewLabel},
-			{Action: xdfileActionSortName, Key: "Ctrl+3", Label: "Name"},
-			{Action: xdfileActionSortExt, Key: "Ctrl+4", Label: "Extens"},
-			{Action: xdfileActionClipboardCopy, Key: "Ctrl+Shift+C", Label: "Copy"},
-			{Action: xdfileActionClipboardCut, Key: "Ctrl+X", Label: "Cut"},
-			{Action: xdfileActionPaste, Key: "Ctrl+Shift+V", Label: "Paste"},
-			{Action: xdfileActionUndoDelete, Key: "Ctrl+Z", Label: "Undo"},
-		}
-	}
-	line1, hits := m.renderFunctionButtons(buttons, m.height-1)
-	m.layout.footerButtons = hits
-
-	return xdfileWrapANSIRender(lipgloss.JoinVertical(
-		lipgloss.Left,
-		xdfileFooterLineStyle.Width(m.width).Render(line0),
-		xdfileFooterLineStyle.Width(m.width).Render(line1),
-	))
 }
 
 func (m *xdfileModel) renderFooterSelection() string {
@@ -268,14 +282,39 @@ func (m *xdfileModel) renderPanel(index int) string {
 	innerW := max(10, rect.w-2)
 	innerH := max(4, rect.h-2)
 	rows := panel.visibleRows(rect.h)
+	filterActive := m.panelFilterActiveFor(index)
+	var viewIndexes []int
+	if filterActive {
+		viewIndexes = m.panelViewIndexes(index)
+	}
 
 	titlePrefix := xdfileTagStyle.Render(panel.Label)
 	if index == m.activePanel {
 		titlePrefix = xdfileTitleStyle.Render(panel.Label)
 	}
-	titleRightParts := []string{fmt.Sprintf("%d/%d", panel.cursorEntryNumber(), panel.entryCount())}
+	cursorNumber := panel.cursorEntryNumber()
+	entryCount := panel.entryCount()
+	if filterActive {
+		cursorNumber = m.panelViewCursorEntryNumber(index, viewIndexes)
+		entryCount = m.panelViewEntryCount(index, viewIndexes)
+	}
+	titleRightParts := []string{fmt.Sprintf("%d/%d", cursorNumber, entryCount)}
 	if marked := panel.markedCount(); marked > 0 {
 		titleRightParts = append(titleRightParts, fmt.Sprintf("%d sel", marked))
+	}
+	if filterActive {
+		query := m.panelFilter.Query
+		if query == "" {
+			query = "filter"
+		}
+		titleRightParts = append(titleRightParts, fmt.Sprintf("filter %q", query))
+	}
+	if m.panelFuzzy.Active && m.panelFuzzy.Panel == index {
+		query := m.panelFuzzy.Query
+		if query == "" {
+			query = "fuzzy"
+		}
+		titleRightParts = append(titleRightParts, fmt.Sprintf("fuzzy %q", query))
 	}
 	if gitLabel := panel.Git.TitleLabel(); gitLabel != "" {
 		titleRightParts = append(titleRightParts, gitLabel)
@@ -299,8 +338,18 @@ func (m *xdfileModel) renderPanel(index int) string {
 
 	lines := make([]string, 0, innerH)
 	lines = append(lines, titleLine, columns)
-	end := min(len(panel.Entries), panel.Scroll+rows)
-	for i := panel.Scroll; i < end; i++ {
+	scroll := panel.Scroll
+	viewLength := len(panel.Entries)
+	if filterActive {
+		scroll = m.panelViewScroll(index)
+		viewLength = len(viewIndexes)
+	}
+	end := min(viewLength, scroll+rows)
+	for viewPosition := scroll; viewPosition < end; viewPosition++ {
+		i := viewPosition
+		if filterActive {
+			i = viewIndexes[viewPosition]
+		}
 		entry := panel.Entries[i]
 		lines = append(lines, m.renderEntry(
 			entry,
@@ -321,6 +370,8 @@ func (m *xdfileModel) renderPanel(index int) string {
 
 	rendered := borderStyle.Width(rect.w - 2).Height(rect.h - 2).Render(strings.Join(lines[:innerH], "\n"))
 	rendered = m.renderPanelSearchOverlay(index, rendered, rect)
+	rendered = m.renderPanelFilterOverlay(index, rendered, rect)
+	rendered = m.renderPanelFuzzyOverlay(index, rendered, rect)
 	return xdfileWrapANSIRender(rendered)
 }
 
@@ -591,6 +642,7 @@ func (m *xdfileModel) renderTerminal() string {
 	innerW := max(10, rect.w-2)
 	innerH := max(4, rect.h-2)
 	managedPopupVisible := m.managedTerminalPopupVisible()
+	historySearchVisible := m.managedTerminalHistorySearchActive()
 	terminalActive := m.terminalFocused || m.terminalExpandedViewActive()
 	m.layout.terminalInputRect = xdfileRect{}
 	m.layout.terminalSuggestionRects = nil
@@ -618,6 +670,8 @@ func (m *xdfileModel) renderTerminal() string {
 		}
 	} else if m.terminal.Busy {
 		titleRight = xdfileStatusOKStyle.Render(m.commandStateLabel())
+	} else if historySearchVisible {
+		titleRight = xdfileTitleStyle.Render("history")
 	} else if managedPopupVisible {
 		titleRight = xdfileTitleStyle.Render("popup")
 	}
@@ -685,9 +739,16 @@ func (m *xdfileModel) renderTerminal() string {
 		lines = append(lines, blankLine)
 	}
 
-	rendered := xdfileTerminalBorder(terminalActive || managedPopupVisible).Width(rect.w - 2).Height(rect.h - 2).
+	rendered := xdfileTerminalBorder(terminalActive || managedPopupVisible || historySearchVisible).Width(rect.w - 2).Height(rect.h - 2).
 		Render(strings.Join(lines[:innerH], "\n"))
-	if managedPopupVisible {
+	if historySearchVisible {
+		popup := m.renderManagedTerminalHistorySearchPopup(innerW, max(0, innerH-2))
+		if popup != "" {
+			popupHeight := lipgloss.Height(popup)
+			overlayY := max(1, 1+inputRow-popupHeight)
+			rendered = stringfunction.PlaceOverlay(1, overlayY, popup, rendered)
+		}
+	} else if managedPopupVisible {
 		popup := m.renderManagedTerminalSuggestionPopup(innerW, max(0, innerH-2))
 		if popup != "" {
 			popupHeight := lipgloss.Height(popup)
@@ -697,6 +758,45 @@ func (m *xdfileModel) renderTerminal() string {
 	}
 
 	return xdfileWrapANSIRender(rendered)
+}
+
+func (m *xdfileModel) renderManagedTerminalHistorySearchPopup(width int, maxHeight int) string {
+	if !m.managedTerminalHistorySearchActive() || width <= 0 || maxHeight < 3 {
+		return ""
+	}
+
+	items := m.terminal.HistorySearchMatches
+	maxItems := max(1, min(8, maxHeight-2))
+	if len(items) > maxItems {
+		items = items[:maxItems]
+	}
+
+	header := "History"
+	if query := strings.TrimSpace(m.terminal.HistorySearchQuery); query != "" {
+		header += ": " + query
+	}
+
+	contentWidth := lipgloss.Width(header) + 2
+	for _, item := range items {
+		contentWidth = max(contentWidth, lipgloss.Width(item)+2)
+	}
+	contentWidth = min(max(18, contentWidth), max(12, width-2))
+
+	lines := make([]string, 0, len(items)+2)
+	lines = append(lines, xdfileMenuItemKeyStyle.Width(contentWidth).Render(charmansi.Truncate(header, contentWidth, "...")))
+	if len(items) == 0 {
+		lines = append(lines, xdfileMenuItemDisabledStyle.Width(contentWidth).Render("(no matches)"))
+	} else {
+		for i, item := range items {
+			style := xdfileMenuItemStyle
+			if i == m.terminal.HistorySearchCursor {
+				style = xdfileMenuItemHot
+			}
+			lines = append(lines, style.Width(contentWidth).Render(charmansi.Truncate(item, contentWidth, "...")))
+		}
+	}
+
+	return xdfileMenuBorder().Width(contentWidth).Render(strings.Join(lines, "\n"))
 }
 
 func (m *xdfileModel) renderManagedTerminalSuggestionPopup(width int, maxHeight int) string {
@@ -804,6 +904,12 @@ func (m *xdfileModel) renderModal() string {
 			lines = append(lines, line)
 		}
 		lines = append(lines, "")
+		if m.modal.Action == xdfileActionTerminalHistory {
+			listHeight := max(1, bodyHeight-len(lines)+1)
+			lines = append(lines, m.renderTerminalHistoryChoiceLines(innerW, listHeight)...)
+			lines = append(lines, "", xdfileDimStyle.Render("Enter/p insert | c copy | Up/Down choose | Esc cancel"))
+			break
+		}
 		choiceLabels := make([]string, 0, len(m.modal.ChoiceItems))
 		for _, item := range m.modal.ChoiceItems {
 			choiceLabels = append(choiceLabels, item.Label)
@@ -836,7 +942,57 @@ func (m *xdfileModel) renderModal() string {
 		lines = append(lines, "")
 	}
 
+	modalSurface := lipgloss.NewStyle().
+		Foreground(xdfileColorText).
+		Background(xdfileColorSurface).
+		Width(innerW)
+	for i := 0; i < innerH; i++ {
+		lines[i] = modalSurface.Render(lines[i])
+	}
 	return xdfileModalBorder().Width(width - 2).Height(height - 2).Render(strings.Join(lines[:innerH], "\n"))
+}
+
+func (m *xdfileModel) renderTerminalHistoryChoiceLines(width int, height int) []string {
+	if width <= 0 || height <= 0 {
+		return nil
+	}
+	items := m.modal.ChoiceItems
+	if len(items) == 0 {
+		return []string{xdfileMenuItemDisabledStyle.Width(width).Render("No command history")}
+	}
+	cursor := xdfileClamp(m.modal.ChoiceCursor, 0, len(items)-1)
+	visibleRows := max(1, height)
+	start := cursor - visibleRows/2
+	if start < 0 {
+		start = 0
+	}
+	if start+visibleRows > len(items) {
+		start = max(0, len(items)-visibleRows)
+	}
+	end := min(len(items), start+visibleRows)
+
+	lines := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		item := items[i]
+		prefix := "  "
+		style := xdfileMenuItemStyle
+		if i == cursor {
+			prefix = "> "
+			style = xdfileMenuItemHot
+		}
+		commandWidth := max(1, width-lipgloss.Width(prefix))
+		command := charmansi.Truncate(item.Label, commandWidth, "...")
+		line := prefix + command
+		if item.Description != "" && width >= 36 {
+			descWidth := min(28, max(8, width/3))
+			leftWidth := max(1, width-descWidth-1)
+			left := charmansi.Truncate(line, leftWidth, "...")
+			right := charmansi.Truncate(item.Description, descWidth, "...")
+			line = xdfileJoinLeftRightPreserveRight(left, right, width, descWidth)
+		}
+		lines = append(lines, style.Width(width).Render(line))
+	}
+	return lines
 }
 
 func xdfileRenderHorizontalModalChoices(labels []string, cursor int, width int) string {
@@ -1039,7 +1195,7 @@ func (m *xdfileModel) buildPreviewContent(path string, width int, height int, bi
 		}
 	}
 
-	if xdfilePreviewCanUseThumbnailForContext(path, docked) {
+	if common.Config.ShowImagePreview && xdfilePreviewCanUseThumbnailForContext(path, docked) {
 		rendered, ok, err := xdfileRenderPreviewThumbnailFunc(m, path, width, height)
 		if err == nil && ok && rendered != "" {
 			if showBinaryToggle {
@@ -1203,26 +1359,104 @@ func (m *xdfileModel) renderFunctionButtons(buttons []xdfileButton, y int) (stri
 	x := 0
 	hits := make([]xdfileButtonRect, 0, len(buttons))
 	var builder strings.Builder
+	width := max(0, m.width)
+	compact := xdfileFunctionButtonsWidth(buttons, false) > width
 
 	for i, button := range buttons {
-		if i > 0 {
+		key, label := xdfileFunctionButtonText(button, compact)
+		rendered := xdfileButtonKeyStyle.Render(key) + xdfileDimStyle.Render(" "+label)
+		if m.hover.FooterAction == button.Action {
+			rendered = xdfileHoveredFooterKeyStyle().Render(key) +
+				xdfileHoveredFooterLabelStyle().Render(" "+label)
+		}
+		buttonWidth := lipgloss.Width(rendered)
+		separatorWidth := 0
+		if i > 0 && builder.Len() > 0 {
+			separatorWidth = 1
+		}
+		if x+separatorWidth+buttonWidth > width {
+			if x < width {
+				if separatorWidth > 0 && x+1 < width {
+					builder.WriteByte(' ')
+					x++
+				}
+				remaining := max(0, width-x)
+				if remaining > 0 {
+					builder.WriteString(xdfileDimStyle.Render(charmansi.Truncate("...", remaining, "")))
+				}
+			}
+			break
+		}
+		if separatorWidth > 0 {
 			builder.WriteByte(' ')
 			x++
 		}
-		label := " " + button.Label + "  "
-		rendered := xdfileButtonKeyStyle.Render(button.Key) +
-			xdfileDimStyle.Render(label)
-		if m.hover.FooterAction == button.Action {
-			rendered = xdfileHoveredFooterKeyStyle().Render(button.Key) +
-				xdfileHoveredFooterLabelStyle().Render(label)
-		}
-		width := lipgloss.Width(rendered)
 		hits = append(hits, xdfileButtonRect{
 			Action: button.Action,
-			Rect:   xdfileRect{x: x, y: y, w: width, h: 1},
+			Rect:   xdfileRect{x: x, y: y, w: buttonWidth, h: 1},
 		})
 		builder.WriteString(rendered)
-		x += width
+		x += buttonWidth
 	}
 	return xdfilePadRight(builder.String(), m.width), hits
+}
+
+func xdfileMenuContentWidth(contentWidth int, windowWidth int) int {
+	if windowWidth <= 2 {
+		return max(1, windowWidth)
+	}
+	return min(max(1, contentWidth), windowWidth-2)
+}
+
+func xdfileFunctionButtonsWidth(buttons []xdfileButton, compact bool) int {
+	width := 0
+	for i, button := range buttons {
+		key, label := xdfileFunctionButtonText(button, compact)
+		if i > 0 {
+			width++
+		}
+		width += lipgloss.Width(key) + 1 + lipgloss.Width(label)
+	}
+	return width
+}
+
+func xdfileFunctionButtonText(button xdfileButton, compact bool) (string, string) {
+	key := button.Key
+	label := button.Label
+	if compact {
+		key = xdfileCompactKeyLabel(key)
+		label = xdfileCompactFooterLabel(label)
+	}
+	return key, label
+}
+
+func xdfileCompactKeyLabel(key string) string {
+	key = strings.ReplaceAll(key, "Ctrl+Shift+", "C-S-")
+	key = strings.ReplaceAll(key, "Ctrl+", "C-")
+	key = strings.ReplaceAll(key, "Shift+", "S-")
+	key = strings.ReplaceAll(key, "Alt+", "A-")
+	return key
+}
+
+func xdfileCompactFooterLabel(label string) string {
+	switch label {
+	case "Commands":
+		return "Menu"
+	case "Preview":
+		return "View"
+	case "Quick view":
+		return "QView"
+	case "Rename":
+		return "Ren"
+	case "Mkdir":
+		return "New"
+	case "Delete":
+		return "Del"
+	case "Hidden":
+		return "Hide"
+	case "Name":
+		return "Name"
+	default:
+		return label
+	}
 }

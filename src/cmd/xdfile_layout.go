@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	variable "github.com/s0x401/xdfile-manager/src/config"
@@ -26,21 +27,31 @@ const (
 )
 
 type xdfileLayoutPrefs struct {
-	PanelSplitPercent       int                 `json:"panel_split_percent"`
-	TerminalHeightPercent   int                 `json:"terminal_height_percent"`
-	PanelClickFocusTerminal bool                `json:"panel_click_focus_terminal"`
-	ShowHidden              bool                `json:"show_hidden"`
-	ThemeName               string              `json:"theme_name,omitempty"`
-	StartupLeftPath         string              `json:"startup_left_path"`
-	StartupRightPath        string              `json:"startup_right_path"`
-	LeftSortMode            xdfileSortMode      `json:"left_sort_mode,omitempty"`
-	RightSortMode           xdfileSortMode      `json:"right_sort_mode,omitempty"`
-	QuickViewDocked         bool                `json:"quick_view_docked,omitempty"`
-	Commands                []xdfileCommandItem `json:"commands,omitempty"`
+	PanelSplitPercent       int                     `json:"panel_split_percent"`
+	TerminalHeightPercent   int                     `json:"terminal_height_percent"`
+	PanelClickFocusTerminal bool                    `json:"panel_click_focus_terminal"`
+	ShowHidden              bool                    `json:"show_hidden"`
+	ThemeName               string                  `json:"theme_name,omitempty"`
+	StartupLeftPath         string                  `json:"startup_left_path"`
+	StartupRightPath        string                  `json:"startup_right_path"`
+	LeftSortMode            xdfileSortMode          `json:"left_sort_mode,omitempty"`
+	RightSortMode           xdfileSortMode          `json:"right_sort_mode,omitempty"`
+	QuickViewDocked         bool                    `json:"quick_view_docked,omitempty"`
+	KeymapPreset            xdfileKeymapPreset      `json:"keymap_preset,omitempty"`
+	Commands                []xdfileCommandItem     `json:"commands,omitempty"`
+	WorkspaceTabs           []xdfileWorkspaceLayout `json:"workspace_tabs,omitempty"`
+	ActiveWorkspaceIndex    int                     `json:"active_workspace_index,omitempty"`
 }
 
 type xdfileCommandPrefs struct {
 	Commands []xdfileCommandItem `json:"commands"`
+}
+
+type xdfileWorkspaceLayout struct {
+	Title       string `json:"title,omitempty"`
+	LeftPath    string `json:"left_path"`
+	RightPath   string `json:"right_path"`
+	ActivePanel int    `json:"active_panel,omitempty"`
 }
 
 func xdfileDefaultLayoutPrefs() xdfileLayoutPrefs {
@@ -53,6 +64,7 @@ func xdfileDefaultLayoutPrefs() xdfileLayoutPrefs {
 		LeftSortMode:            xdfileSortModeName,
 		RightSortMode:           xdfileSortModeName,
 		QuickViewDocked:         true,
+		KeymapPreset:            xdfileKeymapPresetDefault,
 	}
 }
 
@@ -69,8 +81,42 @@ func (p xdfileLayoutPrefs) normalized() xdfileLayoutPrefs {
 	p.ThemeName = xdfileNormalizeThemeName(p.ThemeName)
 	p.LeftSortMode = xdfileNormalizeSortMode(p.LeftSortMode)
 	p.RightSortMode = xdfileNormalizeSortMode(p.RightSortMode)
+	p.KeymapPreset = xdfileNormalizeKeymapPreset(p.KeymapPreset)
 	p.Commands = xdfileNormalizeCommandItems(p.Commands)
+	p.WorkspaceTabs = xdfileNormalizeWorkspaceLayouts(p.WorkspaceTabs)
+	if len(p.WorkspaceTabs) == 0 {
+		p.ActiveWorkspaceIndex = 0
+	} else {
+		p.ActiveWorkspaceIndex = xdfileClamp(p.ActiveWorkspaceIndex, 0, len(p.WorkspaceTabs)-1)
+	}
 	return p
+}
+
+func xdfileNormalizeWorkspaceLayouts(tabs []xdfileWorkspaceLayout) []xdfileWorkspaceLayout {
+	if len(tabs) == 0 {
+		return nil
+	}
+	normalized := make([]xdfileWorkspaceLayout, 0, len(tabs))
+	for _, tab := range tabs {
+		tab.Title = strings.TrimSpace(tab.Title)
+		tab.LeftPath = strings.TrimSpace(tab.LeftPath)
+		tab.RightPath = strings.TrimSpace(tab.RightPath)
+		if tab.LeftPath == "" && tab.RightPath == "" {
+			continue
+		}
+		if tab.RightPath == "" {
+			tab.RightPath = tab.LeftPath
+		}
+		if tab.LeftPath == "" {
+			tab.LeftPath = tab.RightPath
+		}
+		tab.ActivePanel = xdfileClamp(tab.ActivePanel, 0, 1)
+		normalized = append(normalized, tab)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
 }
 
 func xdfileNormalizeSortMode(mode xdfileSortMode) xdfileSortMode {
@@ -283,7 +329,10 @@ func (m *xdfileModel) captureCurrentLayoutPrefs() {
 		LeftSortMode:            current.LeftSortMode,
 		RightSortMode:           current.RightSortMode,
 		QuickViewDocked:         current.QuickViewDocked,
+		KeymapPreset:            current.KeymapPreset,
 		Commands:                append([]xdfileCommandItem(nil), current.Commands...),
+		WorkspaceTabs:           m.workspaceLayoutsForSave(),
+		ActiveWorkspaceIndex:    m.activeWorkspace,
 	}.normalized()
 }
 
@@ -386,6 +435,8 @@ func (m *xdfileModel) resetSetup() tea.Cmd {
 	m.terminalFocused = false
 	m.terminalAutoFocused = false
 	m.showHidden = m.layoutPrefs.ShowHidden
+	m.workspaces = nil
+	m.activeWorkspace = 0
 
 	for i := range m.panels {
 		m.panels[i].clearMarked()
@@ -394,6 +445,7 @@ func (m *xdfileModel) resetSetup() tea.Cmd {
 			return nil
 		}
 	}
+	m.ensureWorkspacesInitialized()
 
 	m.computeLayout()
 	m.ensurePanelCursorsVisible()

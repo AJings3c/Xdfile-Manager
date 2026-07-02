@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -12,7 +14,7 @@ const xdfileTerminalLineLimit = 1200
 
 func (m *xdfileModel) applyModal() tea.Cmd {
 	switch m.modal.Action {
-	case xdfileActionModalRename, xdfileActionModalMkdir, xdfileActionCopy, xdfileActionMove, xdfileActionDelete:
+	case xdfileActionModalRename, xdfileActionModalMkdir, xdfileActionModalArchive, xdfileActionModalExtract, xdfileActionBatchRenamePreview, xdfileActionCopy, xdfileActionMove, xdfileActionDelete:
 		if m.backgroundTaskBusy && !m.fileOperationActive() {
 			m.setStatus("Wait for the current background task to finish")
 			return nil
@@ -44,6 +46,23 @@ func (m *xdfileModel) applyModal() tea.Cmd {
 			TargetPath: dst,
 			PanelIndex: panelIndex,
 		})
+	case xdfileActionModalBatchRename:
+		return m.prepareBatchRenamePreview()
+	case xdfileActionBatchRenamePreview:
+		return m.confirmBatchRenamePreview()
+	case xdfileActionModalZoxideQuery:
+		query := m.modal.Input.Value()
+		panelIndex := m.modal.PanelIndex
+		m.closeModal()
+		return m.startZoxideQuery(query, panelIndex)
+	case xdfileActionModalAICommand:
+		prompt := m.modal.Input.Value()
+		m.closeModal()
+		return m.startAICommandGeneration(prompt)
+	case xdfileActionAICommandDangerConfirm:
+		return m.confirmAICommandDraft()
+	case xdfileActionPluginConfirm:
+		return m.confirmPluginAction()
 	case xdfileActionModalMkdir:
 		panelIndex := m.modal.PanelIndex
 		if !m.validPanelIndex(panelIndex) {
@@ -62,6 +81,76 @@ func (m *xdfileModel) applyModal() tea.Cmd {
 			TargetPath: dst,
 			PanelIndex: panelIndex,
 		})
+	case xdfileActionModalPinName:
+		return m.savePinFromModal()
+	case xdfileActionModalRenamePin:
+		return m.renamePinFromModal()
+	case xdfileActionModalArchive:
+		panelIndex := m.modal.PanelIndex
+		sourcePaths := append([]string(nil), m.modal.SourcePaths...)
+		if len(sourcePaths) == 0 && m.modal.SourcePath != "" {
+			sourcePaths = []string{m.modal.SourcePath}
+		}
+		targetPath, err := m.resolveArchiveTarget(panelIndex, m.modal.Input.Value())
+		if err != nil {
+			m.setStatusErr(err)
+			return nil
+		}
+		if _, err := xdfileNormalizeArchiveSources(sourcePaths); err != nil {
+			m.setStatusErr(err)
+			return nil
+		}
+		if err := xdfileValidateArchiveTarget(sourcePaths, targetPath, true); err != nil {
+			m.setStatusErr(err)
+			return nil
+		}
+		if info, err := os.Stat(targetPath); err == nil {
+			if info.IsDir() {
+				m.setStatusErr(fmt.Errorf("archive target is a directory: %s", targetPath))
+				return nil
+			}
+			m.openArchiveConflict(&xdfilePendingArchive{
+				SourcePaths: sourcePaths,
+				TargetPath:  targetPath,
+				PanelIndex:  panelIndex,
+			})
+			return nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			m.setStatusErr(err)
+			return nil
+		}
+		m.closeModal()
+		return m.startArchiveOperation(sourcePaths, targetPath, panelIndex, false)
+	case xdfileActionModalExtract:
+		panelIndex := m.modal.PanelIndex
+		sourcePath := strings.TrimSpace(m.modal.SourcePath)
+		targetPath, err := m.resolveExtractTarget(panelIndex, m.modal.Input.Value())
+		if err != nil {
+			m.setStatusErr(err)
+			return nil
+		}
+		format, err := xdfileArchiveFormatForTarget(sourcePath)
+		if err != nil {
+			m.setStatusErr(err)
+			return nil
+		}
+		if err := xdfileValidateArchiveEntriesForExtraction(sourcePath, format); err != nil {
+			m.setStatusErr(err)
+			return nil
+		}
+		if _, err := os.Lstat(targetPath); err == nil {
+			m.openExtractConflict(&xdfilePendingExtract{
+				SourcePath: sourcePath,
+				TargetPath: targetPath,
+				PanelIndex: panelIndex,
+			})
+			return nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			m.setStatusErr(err)
+			return nil
+		}
+		m.closeModal()
+		return m.startExtractOperation(sourcePath, targetPath, panelIndex, "")
 	case xdfileActionInsertCommand:
 		if len(m.modal.FormFields) < 3 {
 			m.setStatus("Command form is incomplete")
@@ -142,6 +231,18 @@ func (m *xdfileModel) applyModal() tea.Cmd {
 		sourcePaths := append([]string(nil), m.modal.SourcePaths...)
 		sourcePath := m.modal.SourcePath
 		targetPath := m.modal.TargetPath
+		panelIndex := m.modal.PanelIndex
+		if m.validPanelIndex(panelIndex) {
+			destinationDir := m.panels[1-panelIndex].Cwd
+			if xdfilePanelTransferTouchesRemote(sourcePaths, destinationDir) {
+				if m.backgroundTaskBusy {
+					m.setStatus("Wait for the current background task to finish")
+					return nil
+				}
+				m.closeModal()
+				return m.startPanelRemoteCopy(sourcePaths, destinationDir)
+			}
+		}
 		if len(sourcePaths) <= 1 {
 			target, err := xdfileUniqueCopyTarget(m.modal.TargetPath)
 			if err != nil {
@@ -150,7 +251,6 @@ func (m *xdfileModel) applyModal() tea.Cmd {
 			}
 			targetPath = target
 		}
-		panelIndex := m.modal.PanelIndex
 		m.closeModal()
 		return m.startFileOperation(xdfileFileOperation{
 			Kind:        xdfileFileOperationCopy,
@@ -218,6 +318,12 @@ func (m *xdfileModel) reloadPanel(index int) error {
 	panel.syncMarkedEntries()
 	m.panelDirState[index] = xdfileCapturePanelDirState(panel.Cwd)
 	panel.ensureVisible(panel.visibleRows(m.layout.panelRects[index].h))
+	if m.panelFilterActiveFor(index) {
+		m.syncPanelFilterCursor()
+	}
+	if m.panelFuzzy.Active && m.panelFuzzy.Panel == index {
+		m.syncPanelFuzzyMatches()
+	}
 	m.syncQuickViewViewport()
 	return nil
 }
@@ -407,6 +513,141 @@ func (m *xdfileModel) terminalHistoryNext() bool {
 	return true
 }
 
+func (m *xdfileModel) startTerminalHistorySearch() {
+	if m == nil || m.terminalUsesPTY() || m.terminal.Busy {
+		return
+	}
+	m.terminal.HistorySearchActive = true
+	m.terminal.HistorySearchDraft = m.terminal.Input.Value()
+	m.terminal.HistorySearchQuery = ""
+	m.terminal.HistorySearchCursor = 0
+	m.terminal.HistoryIndex = -1
+	m.terminal.HistoryDraft = ""
+	m.terminal.SuggestionDismissed = true
+	m.terminal.Suggestions = nil
+	m.terminal.SuggestionCursor = -1
+	m.terminal.Input.SetValue("")
+	_ = m.terminal.Input.Focus()
+	m.terminal.Input.CursorEnd()
+	m.refreshTerminalHistorySearchMatches()
+	m.setStatus("History search")
+}
+
+func (m *xdfileModel) cancelTerminalHistorySearch() {
+	if m == nil || !m.terminal.HistorySearchActive {
+		return
+	}
+	draft := m.terminal.HistorySearchDraft
+	m.clearTerminalHistorySearch()
+	m.terminal.Input.SetValue(draft)
+	m.terminal.Input.CursorEnd()
+	m.refreshManagedTerminalSuggestions()
+	m.setStatus("History search canceled")
+}
+
+func (m *xdfileModel) acceptTerminalHistorySearch() {
+	if m == nil || !m.terminal.HistorySearchActive {
+		return
+	}
+	match := m.selectedTerminalHistorySearchMatch()
+	if match == "" {
+		m.setStatus("No matching history command")
+		return
+	}
+	m.clearTerminalHistorySearch()
+	m.terminal.Input.SetValue(match)
+	m.terminal.Input.CursorEnd()
+	m.refreshManagedTerminalSuggestions()
+	m.setStatus("Recalled history command")
+}
+
+func (m *xdfileModel) clearTerminalHistorySearch() {
+	m.terminal.HistorySearchActive = false
+	m.terminal.HistorySearchDraft = ""
+	m.terminal.HistorySearchQuery = ""
+	m.terminal.HistorySearchMatches = nil
+	m.terminal.HistorySearchCursor = 0
+}
+
+func (m *xdfileModel) updateTerminalHistorySearchQuery(query string) {
+	if m == nil || !m.terminal.HistorySearchActive {
+		return
+	}
+	m.terminal.HistorySearchQuery = query
+	m.refreshTerminalHistorySearchMatches()
+}
+
+func (m *xdfileModel) refreshTerminalHistorySearchMatches() {
+	if m == nil {
+		return
+	}
+	m.terminal.HistorySearchMatches = xdfileTerminalHistorySearchMatches(
+		m.terminal.HistorySearchQuery,
+		m.terminal.HistoryItems,
+		m.terminal.History,
+		m.terminal.HistoryDeleted,
+	)
+	if len(m.terminal.HistorySearchMatches) == 0 {
+		m.terminal.HistorySearchCursor = -1
+		return
+	}
+	if m.terminal.HistorySearchCursor < 0 || m.terminal.HistorySearchCursor >= len(m.terminal.HistorySearchMatches) {
+		m.terminal.HistorySearchCursor = 0
+	}
+}
+
+func xdfileTerminalHistorySearchMatches(
+	query string,
+	items map[string]xdfileTerminalHistoryItem,
+	fallback []string,
+	deleted map[string]struct{},
+) []string {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if len(items) == 0 && len(fallback) > 0 {
+		items = xdfileTerminalHistoryItemsFromCommands(fallback)
+	}
+
+	candidates := xdfileSortedTerminalHistoryItems(items, deleted, true)
+	matches := make([]string, 0, len(candidates))
+	for _, item := range candidates {
+		command := strings.TrimSpace(item.Command)
+		if command == "" || xdfileTerminalHistoryDeletedContains(deleted, command) {
+			continue
+		}
+		if query != "" && !strings.Contains(strings.ToLower(command), query) {
+			continue
+		}
+		matches = append(matches, command)
+	}
+	return matches
+}
+
+func (m *xdfileModel) selectedTerminalHistorySearchMatch() string {
+	if m == nil || len(m.terminal.HistorySearchMatches) == 0 {
+		return ""
+	}
+	index := m.terminal.HistorySearchCursor
+	if index < 0 || index >= len(m.terminal.HistorySearchMatches) {
+		index = 0
+	}
+	return m.terminal.HistorySearchMatches[index]
+}
+
+func (m *xdfileModel) moveTerminalHistorySearch(delta int) {
+	if m == nil || len(m.terminal.HistorySearchMatches) == 0 {
+		return
+	}
+	index := m.terminal.HistorySearchCursor
+	if index < 0 || index >= len(m.terminal.HistorySearchMatches) {
+		index = 0
+	}
+	m.terminal.HistorySearchCursor = (index + delta + len(m.terminal.HistorySearchMatches)) % len(m.terminal.HistorySearchMatches)
+}
+
+func (m *xdfileModel) managedTerminalHistorySearchActive() bool {
+	return m != nil && !m.terminalUsesPTY() && m.terminal.HistorySearchActive
+}
+
 func xdfileManagedTerminalInputKey(msg tea.KeyMsg, current string) bool {
 	switch msg.Type {
 	case tea.KeyRunes, tea.KeySpace:
@@ -535,6 +776,7 @@ func (m *xdfileModel) managedTerminalPopupVisible() bool {
 	return m != nil &&
 		!m.terminalUsesPTY() &&
 		!m.terminal.Busy &&
+		!m.terminal.HistorySearchActive &&
 		!m.terminal.SuggestionDismissed &&
 		len(m.terminal.Suggestions) > 0 &&
 		strings.TrimSpace(m.terminal.Input.Value()) != ""
@@ -575,6 +817,7 @@ func (m *xdfileModel) closeTerminalSession() {
 	m.terminal.Session = nil
 	m.terminal.Emulator = nil
 	m.terminal.Events = nil
+	m.terminal.RemoteProfile = ""
 	m.terminalStarting = false
 }
 

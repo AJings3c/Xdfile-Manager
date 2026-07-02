@@ -53,6 +53,10 @@ func writeClipboardPaths(paths []string, cut bool) error {
 	return runLinuxClipboardWriteCommands(linuxClipboardTextWriteCommands(), payload)
 }
 
+func writeClipboardText(text string) error {
+	return runLinuxClipboardWriteCommands(linuxClipboardTextWriteCommands(), text)
+}
+
 func readClipboardVirtualFiles() ([]ShellClipboardFile, error) {
 	return nil, nil
 }

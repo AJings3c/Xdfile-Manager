@@ -220,6 +220,12 @@ func LoadConfigStringGlobals(content embed.FS) error {
 	}
 	HotkeysTomlString = string(hotkeyData)
 
+	vimHotkeyData, err := content.ReadFile(variable.EmbedVimHotkeysFile)
+	if err != nil {
+		return err
+	}
+	VimHotkeysTomlString = string(vimHotkeyData)
+
 	configData, err := content.ReadFile(variable.EmbedConfigFile)
 	if err != nil {
 		return err

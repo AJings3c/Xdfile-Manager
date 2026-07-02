@@ -11,7 +11,7 @@ import (
 	charmansi "github.com/charmbracelet/x/ansi"
 )
 
-func xdfileResolveStartPaths(paths []string, prefs xdfileLayoutPrefs) (string, string) {
+func xdfileResolveStartPaths(paths []string, prefs xdfileLayoutPrefs, configDefaultDir string) (string, string) {
 	cleanedPaths := make([]string, 0, len(paths))
 	for _, path := range paths {
 		if strings.TrimSpace(path) == "" {
@@ -27,6 +27,12 @@ func xdfileResolveStartPaths(paths []string, prefs xdfileLayoutPrefs) (string, s
 	}
 	left := cwd
 	right := cwd
+	if configDefaultDir != "" {
+		if p, resolveErr := xdfileNormalizePath(configDefaultDir); resolveErr == nil {
+			left = p
+			right = p
+		}
+	}
 
 	if len(paths) == 0 {
 		if prefs.StartupLeftPath != "" {
@@ -242,7 +248,7 @@ func xdfileMenuBorder() lipgloss.Style {
 
 func isXdfileMenuAction(action xdfileAction) bool {
 	switch action {
-	case xdfileActionPanelsMenu, xdfileActionViewMenu, xdfileActionTerminalMenu, xdfileActionNetBoxMenu, xdfileActionThemeMenu, xdfileActionOptionsMenu:
+	case xdfileActionPanelsMenu, xdfileActionViewMenu, xdfileActionTerminalMenu, xdfileActionPluginsMenu, xdfileActionNetBoxMenu, xdfileActionThemeMenu, xdfileActionOptionsMenu:
 		return true
 	default:
 		return false
@@ -258,6 +264,16 @@ func (m *xdfileModel) menuDefinitions() []xdfileMenu {
 				{Action: xdfileActionCommandsMenu, Key: "F2", Label: "Commands"},
 				{Action: xdfileActionParent, Label: "Parent"},
 				{Action: xdfileActionSync, Label: "Sync"},
+				{Action: xdfileActionPinsMenu, Label: "Pins"},
+				{Action: xdfileActionAddPin, Label: "Add pin"},
+				{Action: xdfileActionZoxideJump, Label: "Zoxide jump"},
+				{Action: xdfileActionBatchRename, Label: "Batch rename"},
+				{Action: xdfileActionMD5Checksum, Label: "MD5 checksum"},
+				{Action: xdfileActionCopyCurrentPath, Label: "Copy current path"},
+				{Action: xdfileActionCopySelectedPaths, Label: "Copy selected paths"},
+				{Action: xdfileActionCopyCurrentDirectory, Label: "Copy directory path"},
+				{Action: xdfileActionArchive, Label: "Pack archive"},
+				{Action: xdfileActionExtractArchive, Label: "Extract archive"},
 				{Action: xdfileActionRefresh, Key: "R", Label: "Refresh"},
 			},
 		},
@@ -267,7 +283,13 @@ func (m *xdfileModel) menuDefinitions() []xdfileMenu {
 			Items: []xdfileButton{
 				{Action: xdfileActionHidden, Key: "F9", Label: xdfileHiddenLabel(m.showHidden)},
 				{Action: xdfileActionSortName, Key: "Ctrl+3", Label: "Sort by Name"},
-				{Action: xdfileActionSortExt, Key: "Ctrl+4", Label: "Sort by Extens"},
+				{Action: xdfileActionSortExt, Key: "Ctrl+4", Label: "Sort by Ext"},
+				{Action: xdfileActionWorkspaceNew, Key: "Ctrl+T", Label: "New tab"},
+				{Action: xdfileActionWorkspaceClose, Key: "Ctrl+W", Label: "Close tab"},
+				{Action: xdfileActionWorkspaceNext, Key: "Ctrl+]", Label: "Next tab"},
+				{Action: xdfileActionWorkspacePrevious, Key: "Ctrl+[", Label: "Previous tab"},
+				{Action: xdfileActionFilterFiles, Key: "/", Label: "Filter files"},
+				{Action: xdfileActionFuzzySearch, Key: "Ctrl+F", Label: "Fuzzy search"},
 			},
 		},
 		{
@@ -275,19 +297,16 @@ func (m *xdfileModel) menuDefinitions() []xdfileMenu {
 			Label:  "Terminal",
 			Items: []xdfileButton{
 				{Action: xdfileActionTerminalExpand, Key: "Ctrl+O", Label: "Expand terminal"},
+				{Action: xdfileActionTerminalHistory, Label: "Command history"},
+				{Action: xdfileActionAICommand, Label: "AI command"},
 			},
 		},
+		m.pluginMenuDefinition(),
 		m.netBoxMenuDefinition(),
 		{
 			Action: xdfileActionThemeMenu,
 			Label:  "Theme",
-			Items: []xdfileButton{
-				{Action: xdfileActionThemePersona3, Label: xdfileThemeMenuLabel(xdfileThemePersona3Name, m.layoutPrefs.ThemeName)},
-				{Action: xdfileActionThemePersona3Reload, Label: xdfileThemeMenuLabel(xdfileThemePersona3ReloadName, m.layoutPrefs.ThemeName)},
-				{Action: xdfileActionThemePersona3Kotone, Label: xdfileThemeMenuLabel(xdfileThemePersona3KotoneName, m.layoutPrefs.ThemeName)},
-				{Action: xdfileActionThemePersona4, Label: xdfileThemeMenuLabel(xdfileThemePersona4Name, m.layoutPrefs.ThemeName)},
-				{Action: xdfileActionThemePersona5, Label: xdfileThemeMenuLabel(xdfileThemePersona5Name, m.layoutPrefs.ThemeName)},
-			},
+			Items:  m.themeMenuItems(),
 		},
 		{
 			Action: xdfileActionOptionsMenu,
@@ -296,9 +315,33 @@ func (m *xdfileModel) menuDefinitions() []xdfileMenu {
 				{Action: xdfileActionSaveLayout, Label: "Save setup"},
 				{Action: xdfileActionResetLayout, Label: "Reset setup"},
 				{Action: xdfileActionQuickViewMode, Label: xdfileQuickViewModeLabel(m.layoutPrefs.QuickViewDocked)},
+				{Action: xdfileActionToggleKeymap, Label: xdfileKeymapToggleLabel(m.layoutPrefs.KeymapPreset)},
 			},
 		},
 	}
+}
+
+func (m *xdfileModel) availableThemes() []xdfileTheme {
+	if m != nil && len(m.themeCatalog) > 0 {
+		return m.themeCatalog
+	}
+	return xdfilePersonaThemes()
+}
+
+func (m *xdfileModel) themeMenuItems() []xdfileButton {
+	themes := m.availableThemes()
+	items := make([]xdfileButton, 0, len(themes))
+	current := ""
+	if m != nil {
+		current = m.layoutPrefs.ThemeName
+	}
+	for _, theme := range themes {
+		items = append(items, xdfileButton{
+			Action: xdfileThemeMenuAction(theme.Name),
+			Label:  xdfileThemeMenuLabel(theme.Name, current),
+		})
+	}
+	return items
 }
 
 func (m *xdfileModel) currentMenu() (xdfileMenu, bool) {
@@ -720,9 +763,18 @@ func xdfileHelpText() string {
 		"Top menus        Panels / View / Terminal / Theme / Options live on the top-left",
 		"Options          Save setup stores the current layout and preferences",
 		"Options          Reset setup restores layout, theme, view options, hidden files, and the user menu defaults",
+		"Options          Keymap toggles the default bindings and the vim preset",
 		"Enter            open directory or launch file",
 		"Ctrl+Shift+C / Ctrl+X / Ctrl+Shift+V copy, cut, and paste the selected item when a file panel has focus",
+		"Panels menu      copies the current path, selected paths, or current directory as plain text",
+		"Panels menu      Pack archive creates local .zip or .tar.gz archives from the current selection",
+		"Panels menu      Extract archive safely unpacks local .zip or .tar.gz archives into a folder",
+		"Panels menu      Batch rename previews selected local item renames before writing",
+		"Panels menu      Zoxide jump queries zoxide when zoxide_support is enabled",
+		"Panels menu      MD5 checksum computes the selected local file only on demand",
 		"Left/Right       move the file cursor by one page up or down",
+		"/                filter the active panel by filename substring; Esc restores the previous cursor",
+		"Ctrl+F           fuzzy-search the active panel; Enter jumps to the selected match",
 		"Shift+Up/Down    toggle the current item and jump the cursor",
 		"Shift+Left/Right range-select by page, repeat to clear",
 		"Esc              clear the current multi-selection",
@@ -745,6 +797,15 @@ func xdfileHelpText() string {
 		"F10 quit (confirm)",
 		"Panels menu       still contains Sync for mirroring the passive panel path",
 		"",
+		"Vim keymap preset",
+		"",
+		"Options -> Keymap switches to vim-style panel bindings and Save setup persists it",
+		"j/k              move down/up; J/K select down/up",
+		"-                open the parent directory",
+		"a/r/d            create directory, rename, delete",
+		"y/x/p            copy, cut, paste file clipboard items",
+		"Y/c/P            copy current path, copy current directory path, open Pins",
+		"",
 		"Command line",
 		"",
 		"Managed command line  input stays bound to the active panel path",
@@ -752,9 +813,10 @@ func xdfileHelpText() string {
 		"Backspace        edits the command line only; use Enter on [..] or Panels -> Parent to go up",
 		"Popup arrows     when the command popup is open, Up/Down select and Right/Tab accept",
 		"Delete           remove the selected command history prediction",
+		"Ctrl+R           reverse-search command history; Enter recalls without running, Esc restores the draft",
 		"Ctrl+O           expand or restore the bottom terminal inside the Xdfile Manager panel area",
 		"Options          Ctrl+Q Docked switches between floating preview and docked quick view",
-		"Theme            switches between Persona 3, Persona 3 Reload, Persona 4, and Persona 5 visual styles",
+		"Theme            switches between Persona themes and TOML themes found in xdfile-theme",
 		"PgUp/PgDn        scroll terminal output",
 		"Aliases          ls / ll / la / cat are handled by the built-in Xdfile Manager shell",
 		"Mouse            clicking a panel keeps panel focus and the command line follows that panel",

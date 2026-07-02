@@ -1,0 +1,17 @@
+# Build outputs
+/dist/
+/Xdfile-*
+/xdfile-manager
+/*.exe
+*.test
+*.out
+coverage.out
+
+# Runtime data created next to the executable
+/xdfile-data/
+
+# Local OS/editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp

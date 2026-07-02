@@ -6,6 +6,14 @@
 
 # This contains the root config file for Xdfile Manager.
 # Customize it to match your Xdfile Manager workflow.
+#
+# Runtime support note:
+# The current TUI runtime only honors these stable fields:
+#   theme, default_directory, default_open_file_preview, show_image_preview,
+#   enable_file_preview_border, nerdfont, zoxide_support, ai_enabled,
+#   ai_provider, ai_model, ai_api_key_env.
+# Other fields are kept as legacy/reserved configuration until they are
+# explicitly connected by a roadmap task.
 
 ###############################################################################
 #                                   Defaults                                  #
@@ -29,7 +37,7 @@ cd_on_quit = false
 #-- File Preview
 # Should we open a file preview by default whenever selection-hovering over a
 # file?
-default_open_file_preview = true
+default_open_file_preview = false
 
 #-- Image Preview
 # Should we open an image preview by default whenever selection-hovering over an
@@ -93,7 +101,11 @@ file_panel_name_percent = 50
 
 #-- Theme
 # Put your theme's name here!
-theme = "catppuccin-mocha"
+# Runtime themes: persona3, persona3reload, persona3kotone, persona4, persona5.
+# TOML theme files in xdfile-theme/ are also accepted by filename without ".toml",
+# for example gruvbox or catppuccin-mocha. Legacy theme fields are mapped to the
+# current TUI token set with safe fallbacks rather than exposed as a full API.
+theme = "persona3"
 
 #-- Code Previewer
 # Whether to use the builtin syntax highlighting with chroma or use bat. Values: "" for builtin chroma, "bat" for bat
@@ -154,13 +166,27 @@ border_middle_right = '┤'
 # Requires: exiftool
 metadata = false
 
-#-- MD5 Checksum Generation
-# Requires: md5sum
+#-- Legacy MD5 Checksum Generation
+# Reserved legacy option. Runtime MD5 is available on demand from Panels -> MD5
+# checksum and does not read this field.
 enable_md5_checksum = false
 #
 #-- Zoxide Support - Smart directory navigation!
 # Requires: zoxide
 zoxide_support = false
+
+#-- AI command draft generation
+# Disabled by default. v1 only generates an NL2Shell command draft and fills the
+# terminal input; it never presses Enter automatically.
+ai_enabled = false
+
+# Provider and model are reserved for the configured provider implementation.
+ai_provider = ""
+ai_model = ""
+
+# Name of the environment variable that contains the API key. The key value is
+# never written to config or sent through file content context.
+ai_api_key_env = ""
 
 #-- File opening rules
 # Map file extensions to commands used to open them.

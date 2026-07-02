@@ -8,11 +8,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	variable "github.com/s0x401/xdfile-manager/src/config"
 	filepreview "github.com/s0x401/xdfile-manager/src/pkg/file_preview"
 )
 
-func runXdfileApp(paths []string) error {
-	m := newXdfileModel(paths)
+func runXdfileApp(paths []string, showStartHub bool) error {
+	m := newXdfileModel(paths, showStartHub)
 	defer m.closeXdfileResources()
 
 	p := tea.NewProgram(
@@ -24,20 +25,38 @@ func runXdfileApp(paths []string) error {
 	return err
 }
 
-func newXdfileModel(paths []string) *xdfileModel {
+func newXdfileModel(paths []string, showStartHub bool) *xdfileModel {
 	deleteUndoCleanupCount, deleteUndoCleanupErr := xdfileCleanupDeleteUndoState(xdfileDeleteUndoStatePath())
+	runtimeConfig, runtimeConfigErr := xdfileLoadRuntimeConfig(variable.ConfigFile)
+	xdfileApplyRuntimeConfig(runtimeConfig)
 	layoutFile := xdfileLayoutPrefsPath()
+	layoutFileExists := xdfilePathExists(layoutFile)
 	layoutPrefs, layoutErr := xdfileLoadLayoutPrefs(layoutFile)
+	layoutPrefs = xdfileApplyRuntimeConfigLayoutDefaults(layoutPrefs, layoutFileExists, runtimeConfig)
+	keymap, keymapErr := xdfileKeymapForPreset(layoutPrefs.KeymapPreset)
+	if keymapErr != nil {
+		keymap = xdfileDefaultKeymap()
+		layoutPrefs.KeymapPreset = xdfileKeymapPresetDefault
+	}
 	commandsFile := xdfileCommandsPrefsPath()
 	commands, commandsErr := xdfileLoadOrMigrateCommandPrefs(layoutFile, commandsFile, &layoutPrefs)
 	layoutPrefs.Commands = append([]xdfileCommandItem(nil), commands...)
 	netboxFile := xdfileNetBoxPrefsPath()
 	netboxConnections, netboxErr := xdfileLoadNetBoxPrefs(netboxFile)
 	xdfileSetNetBoxConnectionsCache(netboxConnections)
-	layoutPrefs.ThemeName = xdfileNormalizeThemeName(layoutPrefs.ThemeName)
-	xdfileApplyTheme(xdfileThemeByName(layoutPrefs.ThemeName))
-	leftPath, rightPath := xdfileResolveStartPaths(paths, layoutPrefs)
-	terminalHistoryItems, terminalHistoryDeleted, terminalHistoryErr := xdfileLoadTerminalHistoryState(xdfileTerminalHistoryPath())
+	pinsFile := xdfilePinnedPrefsPath()
+	pins, pinsErr := xdfileLoadPinPrefs(pinsFile)
+	pluginsDir := xdfilePluginsDirPath()
+	plugins, pluginsErr := xdfileLoadPlugins(pluginsDir)
+	themeCatalog := xdfileThemeCatalog(variable.ThemeFolder)
+	theme, ok := xdfileThemeFromCatalog(layoutPrefs.ThemeName, themeCatalog)
+	if !ok {
+		theme = xdfilePersona3Theme()
+	}
+	layoutPrefs.ThemeName = theme.Name
+	xdfileApplyTheme(theme)
+	leftPath, rightPath := xdfileResolveStartPaths(paths, layoutPrefs, runtimeConfig.defaultDirectory())
+	terminalHistoryItems, terminalHistoryLog, terminalHistoryDeleted, terminalHistoryErr := xdfileLoadTerminalHistoryState(xdfileTerminalHistoryPath())
 	terminalHistoryItems = xdfileMergeTerminalHistorySeed(terminalHistoryItems, xdfileLoadTerminalHistorySeed(), terminalHistoryDeleted)
 	terminalHistory := xdfileTerminalHistoryCommands(terminalHistoryItems, terminalHistoryDeleted)
 
@@ -58,6 +77,8 @@ func newXdfileModel(paths []string) *xdfileModel {
 	terminalLines := []string{}
 
 	m := &xdfileModel{
+		screen:      xdfileInitialScreen(showStartHub),
+		startHub:    xdfileNewStartHubState(),
 		activePanel: 0,
 		statusText:  "Type to build a command. Arrows stay on panels unless the command popup is open.",
 		panels: [2]xdfilePanel{
@@ -66,12 +87,21 @@ func newXdfileModel(paths []string) *xdfileModel {
 		},
 		showHidden:           layoutPrefs.ShowHidden,
 		layoutPrefs:          layoutPrefs,
+		themeCatalog:         themeCatalog,
+		keymap:               keymap,
+		zoxideEnabled:        runtimeConfig.zoxideSupport(),
+		aiConfig:             runtimeConfig.aiConfig(),
 		layoutFile:           layoutFile,
 		commandsFile:         commandsFile,
 		netboxFile:           netboxFile,
+		pinsFile:             pinsFile,
+		pluginsDir:           pluginsDir,
 		netboxConnections:    netboxConnections,
+		pins:                 pins,
+		plugins:              plugins,
 		commandPromptHistory: make(map[string]string),
 		quickView: xdfileQuickView{
+			Open:     runtimeConfig.defaultOpenFilePreview() && layoutPrefs.QuickViewDocked,
 			Viewport: quickViewVP,
 		},
 		terminal: xdfileTerminal{
@@ -84,6 +114,7 @@ func newXdfileModel(paths []string) *xdfileModel {
 			Emulator:         nil,
 			History:          terminalHistory,
 			HistoryItems:     terminalHistoryItems,
+			HistoryLog:       terminalHistoryLog,
 			HistoryDeleted:   terminalHistoryDeleted,
 			HistoryIndex:     -1,
 			PendingPanel:     -1,
@@ -100,15 +131,30 @@ func newXdfileModel(paths []string) *xdfileModel {
 		panelSearch: xdfilePanelSearchState{
 			Panel: -1,
 		},
+		panelFuzzy: xdfilePanelFuzzyState{
+			Panel: -1,
+		},
 	}
 	if layoutErr != nil {
 		m.setStatusErr(fmt.Errorf("layout settings ignored: %w", layoutErr))
+	}
+	if runtimeConfigErr != nil {
+		m.setStatusErr(fmt.Errorf("runtime config ignored: %w", runtimeConfigErr))
+	}
+	if keymapErr != nil {
+		m.setStatusErr(fmt.Errorf("keymap preset ignored: %w", keymapErr))
 	}
 	if commandsErr != nil {
 		m.setStatusErr(fmt.Errorf("user menu settings ignored: %w", commandsErr))
 	}
 	if netboxErr != nil {
 		m.setStatusErr(fmt.Errorf("SSH connection settings ignored: %w", netboxErr))
+	}
+	if pinsErr != nil {
+		m.setStatusErr(fmt.Errorf("pin settings ignored: %w", pinsErr))
+	}
+	if pluginsErr != nil {
+		m.setStatusErr(fmt.Errorf("plugin settings ignored: %w", pluginsErr))
 	}
 	if terminalHistoryErr != nil {
 		m.setStatusErr(fmt.Errorf("terminal history ignored: %w", terminalHistoryErr))
@@ -122,6 +168,7 @@ func newXdfileModel(paths []string) *xdfileModel {
 		}
 		m.setStatus("Released %d stale delete undo %s from the previous session", deleteUndoCleanupCount, label)
 	}
+	m.initializeWorkspacesFromLayout(layoutPrefs, !showStartHub && layoutFileExists && len(paths) == 0)
 	m.reloadAllPanels()
 	m.syncThemeInputStyles()
 	m.refreshManagedTerminalSuggestions()
@@ -251,11 +298,16 @@ func (m *xdfileModel) focusManagedTerminalInput() {
 	m.terminal.Input.CursorEnd()
 }
 
-func (m *xdfileModel) applyThemeByName(name string) {
-	theme := xdfileThemeByName(name)
+func (m *xdfileModel) applyThemeByName(name string) bool {
+	theme, ok := xdfileThemeFromCatalog(name, m.availableThemes())
+	if !ok {
+		m.setStatus("Theme not found: %s", name)
+		return false
+	}
 	xdfileApplyTheme(theme)
 	m.layoutPrefs.ThemeName = theme.Name
 	m.syncThemeInputStyles()
+	return true
 }
 
 func (m *xdfileModel) Init() tea.Cmd {

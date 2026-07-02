@@ -76,6 +76,12 @@ func writeClipboardPaths(paths []string, cut bool) error {
 	return cmd.Run()
 }
 
+func writeClipboardText(text string) error {
+	cmd := exec.Command("pbcopy")
+	cmd.Stdin = strings.NewReader(text)
+	return cmd.Run()
+}
+
 func readClipboardVirtualFiles() ([]ShellClipboardFile, error) {
 	return nil, nil
 }

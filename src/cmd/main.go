@@ -129,6 +129,11 @@ func Run(content embed.FS) {
 				Usage:   "On trying to open any file, Xdfile Manager will write its path to this file and exit",
 				Value:   "", // Default to the blank string indicating non-usage of flag
 			},
+			&cli.BoolFlag{
+				Name:  "workbench",
+				Usage: "Open the file workbench directly instead of the Start Hub",
+				Value: false,
+			},
 		},
 		Action: xdfileRootAction,
 	}
@@ -146,7 +151,9 @@ func xdfileRootAction(_ context.Context, c *cli.Command) error {
 	if err := utils.SetRootLoggerToFile(variable.LogFile, false); err != nil {
 		return fmt.Errorf("open log file: %w", err)
 	}
-	if err := runXdfileApp(c.Args().Slice()); err != nil {
+	paths := c.Args().Slice()
+	showStartHub := len(paths) == 0 && !c.Bool("workbench")
+	if err := runXdfileApp(paths, showStartHub); err != nil {
 		return err
 	}
 	return nil

@@ -54,6 +54,7 @@ const (
 type xdfileTerminalPTYSession struct {
 	backend  xdfileTerminalPTYBackend
 	process  *os.Process
+	wait     func() error
 	emulator *vt.SafeEmulator
 	events   chan tea.Msg
 	mouse    *xdfilePTYMouseProxy
@@ -129,9 +130,24 @@ func xdfileNewTerminalPTYSession(
 	mode xdfileTerminalPTYMode,
 	mouseInput xdfilePTYMouseInputMode,
 ) *xdfileTerminalPTYSession {
+	return xdfileNewTerminalPTYSessionWithWait(backend, process, nil, shellKind, events, width, height, mode, mouseInput)
+}
+
+func xdfileNewTerminalPTYSessionWithWait(
+	backend xdfileTerminalPTYBackend,
+	process *os.Process,
+	wait func() error,
+	shellKind xdfileTerminalShellKind,
+	events chan tea.Msg,
+	width int,
+	height int,
+	mode xdfileTerminalPTYMode,
+	mouseInput xdfilePTYMouseInputMode,
+) *xdfileTerminalPTYSession {
 	session := &xdfileTerminalPTYSession{
 		backend:  backend,
 		process:  process,
+		wait:     wait,
 		emulator: vt.NewSafeEmulator(max(1, width), max(1, height)),
 		events:   events,
 		mouseIn:  mouseInput,
@@ -141,7 +157,7 @@ func xdfileNewTerminalPTYSession(
 	session.emulator.SetScrollbackSize(xdfileTerminalScrollbackLimit)
 	session.emulator.SetCallbacks(vt.Callbacks{
 		WorkingDirectory: func(cwd string) {
-			session.sendWorkingDirectory(xdfileNormalizeTerminalWorkingDirectory(cwd))
+			session.sendWorkingDirectory(cwd)
 		},
 		Title: func(title string) {
 			session.sendTitle(title)
@@ -270,11 +286,16 @@ func (s *xdfileTerminalPTYSession) runOutputLoop() {
 }
 
 func (s *xdfileTerminalPTYSession) runWaitLoop() {
-	if s == nil || s.process == nil {
+	if s == nil || (s.process == nil && s.wait == nil) {
 		return
 	}
 
-	_, err := s.process.Wait()
+	var err error
+	if s.wait != nil {
+		err = s.wait()
+	} else {
+		_, err = s.process.Wait()
+	}
 	if err != nil {
 		if !s.isClosing() {
 			s.sendExit(fmt.Errorf("PTY process exited: %w", err))
@@ -336,7 +357,15 @@ func (s *xdfileTerminalPTYSession) sendTitle(title string) {
 }
 
 func (s *xdfileTerminalPTYSession) sendWorkingDirectory(cwd string) {
-	if s == nil || s.mode == xdfileTerminalPTYModeExclusive {
+	if s == nil {
+		return
+	}
+	cwd = xdfileNormalizeTerminalWorkingDirectory(cwd)
+	if !xdfileIsUsableTerminalWorkingDirectory(cwd) {
+		return
+	}
+	if s.mode == xdfileTerminalPTYModeExclusive {
+		s.send(xdfileExclusiveTerminalCwdMsg{Cwd: cwd})
 		return
 	}
 	s.send(xdfileTerminalCwdMsg{Cwd: cwd})
@@ -344,36 +373,47 @@ func (s *xdfileTerminalPTYSession) sendWorkingDirectory(cwd string) {
 
 func xdfileNormalizeTerminalWorkingDirectory(cwd string) string {
 	cwd = strings.TrimSpace(cwd)
-	if cwd == "" || !strings.HasPrefix(strings.ToLower(cwd), "file://") {
-		return cwd
+	if cwd == "" {
+		return ""
+	}
+	lower := strings.ToLower(cwd)
+	if !strings.HasPrefix(lower, "file://") {
+		if strings.Contains(cwd, "://") {
+			return ""
+		}
+		return filepath.Clean(cwd)
 	}
 
 	u, err := url.Parse(cwd)
 	if err != nil || u.Scheme != "file" {
-		return cwd
+		return ""
 	}
 
 	path := u.Path
 	if path == "" {
-		return cwd
+		return ""
+	}
+	if u.Host != "" && !strings.EqualFold(u.Host, "localhost") {
+		return ""
 	}
 
 	if runtime.GOOS == "windows" {
-		if u.Host != "" && !strings.EqualFold(u.Host, "localhost") {
-			unc := `\\` + u.Host + filepath.FromSlash(path)
-			return filepath.Clean(unc)
-		}
-
 		if len(path) >= 3 && path[0] == '/' && path[2] == ':' {
 			path = path[1:]
 		}
 		return filepath.Clean(filepath.FromSlash(path))
 	}
 
-	if u.Host != "" && !strings.EqualFold(u.Host, "localhost") {
-		return filepath.Clean("//" + u.Host + path)
-	}
 	return filepath.Clean(path)
+}
+
+func xdfileIsUsableTerminalWorkingDirectory(cwd string) bool {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" || xdfileIsNetBoxPath(cwd) || !filepath.IsAbs(cwd) {
+		return false
+	}
+	info, err := os.Stat(cwd)
+	return err == nil && info.IsDir()
 }
 
 func (m *xdfileModel) terminalUsesPTY() bool {
@@ -590,7 +630,8 @@ func (m *xdfileModel) syncPanelFromPTYPrompt() {
 }
 
 func (m *xdfileModel) applyTerminalCwd(cwd string) {
-	if cwd == "" {
+	cwd = xdfileNormalizeTerminalWorkingDirectory(cwd)
+	if !xdfileIsUsableTerminalWorkingDirectory(cwd) {
 		return
 	}
 

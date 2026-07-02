@@ -108,8 +108,8 @@ func (m *xdfileModel) panelEntryIndexAt(panelIndex int, rect xdfileRect, y int) 
 	if row < 0 || row >= rows {
 		return 0, false
 	}
-	index := m.panels[panelIndex].Scroll + row
-	if index < 0 || index >= len(m.panels[panelIndex].Entries) {
+	index, ok := m.panelViewIndexAt(panelIndex, row, rows)
+	if !ok || index < 0 || index >= len(m.panels[panelIndex].Entries) {
 		return 0, false
 	}
 	return index, true
@@ -137,8 +137,8 @@ func (m *xdfileModel) panelMouseHitAt(x int, y int) (xdfilePanelMouseHit, bool) 
 		case row >= rows:
 			hit.Blank = xdfilePanelMouseBlankBottom
 		default:
-			index := panel.Scroll + row
-			if index >= 0 && index < len(m.panels[i].Entries) {
+			index, ok := m.panelViewIndexAt(i, row, rows)
+			if ok && index >= 0 && index < len(m.panels[i].Entries) {
 				hit.EntryIndex = index
 				hit.OnEntry = true
 			} else {
@@ -152,6 +152,9 @@ func (m *xdfileModel) panelMouseHitAt(x int, y int) (xdfilePanelMouseHit, bool) 
 
 func (m *xdfileModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	m.updateMouseHover(msg)
+	if msg.Action == tea.MouseActionPress && m.panelFuzzy.Active {
+		m.closePanelFuzzySearch(false)
+	}
 	if msg.Action == tea.MouseActionPress && m.panelSearch.Active {
 		m.closePanelSearch()
 	}
@@ -271,9 +274,9 @@ func (m *xdfileModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			if rect.contains(msg.X, msg.Y) {
 				rows := m.panels[i].visibleRows(rect.h)
 				if msg.Button == tea.MouseButtonWheelUp {
-					m.panels[i].scroll(-3, rows)
+					m.scrollPanelView(i, -3, rows)
 				} else {
-					m.panels[i].scroll(3, rows)
+					m.scrollPanelView(i, 3, rows)
 				}
 				m.updateMouseHover(msg)
 				return nil
@@ -343,7 +346,7 @@ func (m *xdfileModel) handlePanelBlankMousePress(msg tea.MouseMsg, hit xdfilePan
 	panel := &m.panels[hit.Panel]
 	m.panelMouse = xdfilePanelMouseState{}
 
-	if len(panel.Entries) == 0 {
+	if len(panel.Entries) == 0 || (m.panelFilterActiveFor(hit.Panel) && len(m.panelViewIndexes(hit.Panel)) == 0) {
 		panel.clearMarked()
 		m.lastClick = xdfileClickState{panel: -1, row: -1}
 		m.syncQuickViewViewport()
@@ -422,14 +425,10 @@ func (m *xdfileModel) panelMouseDragIndexAt(panelIndex int, x int, y int) (int, 
 
 	rows := m.panels[panelIndex].visibleRows(rect.h)
 	row := y - (rect.y + 3)
-	index := m.panels[panelIndex].Scroll + row
-	if row < 0 {
-		index = m.panels[panelIndex].Scroll
+	index, ok := m.panelViewIndexAt(panelIndex, row, rows)
+	if !ok {
+		return 0, 0, false
 	}
-	if row >= rows {
-		index = m.panels[panelIndex].Scroll + rows - 1
-	}
-	index = max(0, min(index, len(m.panels[panelIndex].Entries)-1))
 	return index, rows, true
 }
 
@@ -643,6 +642,9 @@ func (m *xdfileModel) syncTerminalToPanel(index int) tea.Cmd {
 		if m.terminalUsesPTY() && (m.terminal.Title == "" || xdfilePathsEqual(m.terminal.Title, previous)) {
 			m.terminal.Title = target
 		}
+		if m.terminalUsesPTY() && !xdfilePathsEqual(previous, target) && xdfileNetBoxSameRemoteProfile(previous, target) {
+			m.requestRemotePTYTerminalCwdSync(target)
+		}
 		m.refreshManagedTerminalSuggestions()
 		return nil
 	}
@@ -657,7 +659,7 @@ func (m *xdfileModel) syncTerminalToPanel(index int) tea.Cmd {
 		m.terminal.Title = target
 	}
 
-	if !m.terminalUsesPTY() || xdfilePathsEqual(previous, target) {
+	if !m.terminalUsesPTY() || m.terminal.RemoteProfile != "" || xdfilePathsEqual(previous, target) {
 		m.terminal.PendingCwd = ""
 		m.refreshManagedTerminalSuggestions()
 		return nil

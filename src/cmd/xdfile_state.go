@@ -14,6 +14,7 @@ import (
 type xdfileTerminal struct {
 	Cwd            string
 	Title          string
+	RemoteProfile  string
 	Busy           bool
 	Input          textinput.Model
 	Viewport       viewport.Model
@@ -36,9 +37,15 @@ type xdfileTerminal struct {
 
 	History               []string
 	HistoryItems          map[string]xdfileTerminalHistoryItem
+	HistoryLog            []xdfileTerminalHistoryLogEntry
 	HistoryDeleted        map[string]struct{}
 	HistoryIndex          int
 	HistoryDraft          string
+	HistorySearchActive   bool
+	HistorySearchDraft    string
+	HistorySearchQuery    string
+	HistorySearchMatches  []string
+	HistorySearchCursor   int
 	CommandHadOutput      bool
 	PendingPanel          int
 	PendingCwd            string
@@ -55,6 +62,8 @@ type xdfileTerminal struct {
 type xdfileLayout struct {
 	menuButtons             []xdfileButtonRect
 	footerButtons           []xdfileButtonRect
+	startHubNavRects        []xdfileButtonRect
+	startHubItemRects       []xdfileButtonRect
 	menuItemRects           []xdfileButtonRect
 	menuRect                xdfileRect
 	panelRects              [2]xdfileRect
@@ -68,6 +77,31 @@ type xdfileClickState struct {
 	panel int
 	row   int
 	at    time.Time
+}
+
+type xdfileScreen int
+
+const (
+	xdfileScreenWorkbench xdfileScreen = iota
+	xdfileScreenStartHub
+)
+
+type xdfileStartHubNav int
+
+const (
+	xdfileStartHubNavLocal xdfileStartHubNav = iota
+	xdfileStartHubNavHosts
+	xdfileStartHubNavRecent
+	xdfileStartHubNavSettings
+)
+
+type xdfileStartHubState struct {
+	Nav          xdfileStartHubNav
+	Cursor       int
+	Search       string
+	SearchActive bool
+	LastClickRow int
+	LastClickAt  time.Time
 }
 
 type xdfilePanelMouseState struct {
@@ -92,6 +126,25 @@ type xdfilePanelSearchState struct {
 	Active  bool
 	Panel   int
 	Pattern string
+}
+
+type xdfilePanelFilterState struct {
+	Active       bool
+	Panel        int
+	Query        string
+	Scroll       int
+	CursorBefore int
+	ScrollBefore int
+}
+
+type xdfilePanelFuzzyState struct {
+	Active       bool
+	Panel        int
+	Query        string
+	Matches      []xdfilePanelFuzzyMatch
+	Cursor       int
+	CursorBefore int
+	ScrollBefore int
 }
 
 type xdfileTerminalFocusState struct {
@@ -144,6 +197,18 @@ type xdfileTerminalCommandDoneMsg struct {
 	Canceled bool
 }
 
+type xdfileAICommandDoneMsg struct {
+	Prompt  string
+	Command string
+	Err     error
+}
+
+type xdfilePluginActionDoneMsg struct {
+	Plugin   xdfilePluginManifest
+	Response xdfilePluginResponse
+	Err      error
+}
+
 type xdfileTerminalCommandPollMsg struct{}
 
 type xdfileTerminalExitMsg struct {
@@ -161,9 +226,11 @@ type xdfileTerminalCommandStartMsg struct {
 type xdfileTerminalStreamScreenMsg struct{}
 
 type xdfileTerminalStartResultMsg struct {
-	Session *xdfileTerminalPTYSession
-	Err     error
-	Dir     string
+	Session       *xdfileTerminalPTYSession
+	Err           error
+	Dir           string
+	Title         string
+	RemoteProfile string
 }
 
 type xdfileExclusiveTerminal struct {
@@ -187,12 +254,21 @@ type xdfileExclusiveTerminalTitleMsg struct {
 	Title string
 }
 
+type xdfileExclusiveTerminalCwdMsg struct {
+	Cwd string
+}
+
 type xdfileExclusiveTerminalExitMsg struct {
 	Err error
 }
 
 type xdfileClipboardWriteResultMsg struct {
 	Err error
+}
+
+type xdfileClipboardTextWriteResultMsg struct {
+	Paths []string
+	Err   error
 }
 
 type xdfileRemoteClipboardCopyResultMsg struct {
@@ -208,6 +284,13 @@ type xdfileRemoteClipboardPasteDoneMsg struct {
 	TargetPath string
 	TopLevel   bool
 	Err        error
+}
+
+type xdfileRemotePanelCopyDownloadDoneMsg struct {
+	Paths          []string
+	CacheDir       string
+	DestinationDir string
+	Err            error
 }
 
 type xdfileLocalClipboardPasteDoneMsg struct {
@@ -254,6 +337,7 @@ type xdfilePendingClipboardPaste struct {
 	VirtualSources       []xdfileShellClipboardFile
 	CutMode              bool
 	DestinationDir       string
+	CacheDir             string
 	Queue                []xdfilePendingClipboardPasteItem
 	ConflictSource       string
 	ConflictTarget       string
@@ -281,10 +365,56 @@ type xdfilePendingClipboardPasteItem struct {
 	VirtualIndex int
 }
 
+type xdfilePendingArchive struct {
+	SourcePaths []string
+	TargetPath  string
+	PanelIndex  int
+}
+
+type xdfilePendingExtract struct {
+	SourcePath string
+	TargetPath string
+	PanelIndex int
+}
+
+type xdfileBatchRenameItem struct {
+	SourcePath string
+	TargetPath string
+	OldName    string
+	NewName    string
+}
+
+type xdfilePendingBatchRename struct {
+	Items      []xdfileBatchRenameItem
+	PanelIndex int
+	Template   string
+}
+
+type xdfileZoxideCandidate struct {
+	Path string
+}
+
+type xdfileZoxideQueryDoneMsg struct {
+	Query      string
+	PanelIndex int
+	Candidates []xdfileZoxideCandidate
+	Err        error
+}
+
+type xdfileMD5ChecksumDoneMsg struct {
+	Path     string
+	Name     string
+	Checksum string
+	Size     int64
+	Err      error
+}
+
 type xdfileModel struct {
 	width  int
 	height int
 
+	screen              xdfileScreen
+	startHub            xdfileStartHubState
 	activePanel         int
 	terminalFocused     bool
 	terminalAutoFocused bool
@@ -301,11 +431,21 @@ type xdfileModel struct {
 	thumbnailGenerator *filepreview.ThumbnailGenerator
 	layout             xdfileLayout
 	layoutPrefs        xdfileLayoutPrefs
+	themeCatalog       []xdfileTheme
+	keymap             xdfileKeymap
+	zoxideEnabled      bool
+	aiConfig           xdfileAIConfig
 	layoutFile         string
 	commandsFile       string
 	netboxFile         string
+	pinsFile           string
+	pluginsDir         string
 	netboxConnections  []xdfileNetBoxConnection
+	pins               []xdfilePin
+	plugins            []xdfilePluginManifest
 	quickView          xdfileQuickView
+	workspaces         []xdfileWorkspace
+	activeWorkspace    int
 
 	statusText             string
 	statusError            bool
@@ -315,6 +455,7 @@ type xdfileModel struct {
 	panelMouse             xdfilePanelMouseState
 	clipboardPath          string
 	clipboardPaths         []string
+	clipboardTextPaths     []string
 	clipboardCut           bool
 	openMenu               xdfileAction
 	menuCursor             int
@@ -333,12 +474,20 @@ type xdfileModel struct {
 	deleteUndoStack        []xdfileDeleteUndoBatch
 	clipboardMoveUndoStack []xdfileClipboardMoveUndoBatch
 	pendingClipboardPaste  *xdfilePendingClipboardPaste
+	pendingArchive         *xdfilePendingArchive
+	pendingExtract         *xdfilePendingExtract
+	pendingBatchRename     *xdfilePendingBatchRename
+	pendingAICommand       string
+	pendingPluginAction    *xdfilePluginActionDoneMsg
+	zoxideCandidates       []xdfileZoxideCandidate
 	fileOperationCancel    func()
 	fileOperationProgress  *xdfileFileOperationProgress
 	fileOperationQueue     []xdfileFileOperation
 	terminalStarting       bool
 	hover                  xdfileHoverState
 	panelSearch            xdfilePanelSearchState
+	panelFilter            xdfilePanelFilterState
+	panelFuzzy             xdfilePanelFuzzyState
 }
 
 var xdfileRenderPreviewThumbnailFunc = func(m *xdfileModel, path string, width int, height int) (string, bool, error) {
